@@ -6,6 +6,8 @@ the Bitcoin Lightning Network ([L402](https://github.com/lightninglabs/L402))
 or **do some work** (a proof-of-work puzzle, like Bitcoin mining in
 miniature). Everything else passes through untouched.
 
+Project page with a 25-second demo video: **https://malaga82.github.io/spikes402/**
+
 > **Status: experimental.** This is a first prototype. Do not use it with
 > real money on mainnet before an independent review.
 
