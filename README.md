@@ -120,6 +120,10 @@ A JSON file (see [`config.example.json`](config.example.json)):
 | `pow_seconds_per_sat` | How much work replaces one sat: seconds of one CPU core (see [Proof-of-work pricing](#proof-of-work-pricing)). Values below 1 are refused unless `unsafe_allow_dangerous_config` is set | `10` |
 | `pow_difficulty` | Leading zero bits for the puzzle. `0` = derive from the price and `pow_seconds_per_sat` | `0` |
 | `pow_algorithm` | `"sha256d"` or `"argon2id"` (memory-hard, see [Argon2id](#argon2id-memory-hard-proof-of-work)) | `"sha256d"` |
+| `lottery.pool` | Solo pool (stratum v1) that turns sha256d work into Bitcoin lottery tickets, `"host:port"` or `"tls://host:port"`. See [Bitcoin lottery](#bitcoin-lottery) | off |
+| `lottery.address` | With `lottery.pool`: the Bitcoin address the pool pays a block to (public, shown on the dashboard) | required with a pool |
+| `lottery.worker` | Optional worker name, sent as `address.worker` | `""` |
+| `lottery.password` | Pool password, usually ignored | `"x"` |
 | `argon2_memory_mib` | Memory per Argon2id attempt, 8–256 MiB | `16` |
 | `argon2_max_memory_mib` | Memory all concurrent Argon2id checks may use together. A check that needs more than this is refused at startup. Extra checks wait briefly, then `503` | `256` |
 | `challenge_ttl_seconds` | How long a 402 offer (token and invoice) stays valid | `600` |
@@ -403,6 +407,43 @@ page carries the paywall markup), or leaving that page unprotected. Serving the 
 with status 200 to everyone would be indexable, but changes what a 402 means
 for bots; it is not implemented.
 
+### Bitcoin lottery
+
+With `lottery` set, the gate connects to a **solo pool** as a miner
+(stratum v1) and every sha256d proof of work is also done on a **real
+Bitcoin block header**: the same double SHA-256, the same cost, but a hash
+good enough for the network would be a whole block, paid by the pool to
+your address. Nothing else changes for the site.
+
+```json
+"lottery": { "pool": "solo.ckpool.org:3333", "address": "bc1q...", "worker": "mysite" }
+```
+
+- Each 402 keeps its ordinary puzzle first and adds a second PoW challenge,
+  `algorithm="bitcoin"`, with its own token and a 76-byte `header` (block
+  header without its nonce, with an extranonce of its own). The answer is a
+  32-bit nonce such that `SHA256(SHA256(header + nonce as 4 little-endian
+  bytes))`, read as a little-endian number the way Bitcoin shows hashes,
+  has `difficulty` leading zero bits. Clients that do not know it keep
+  solving the ordinary puzzle; the Go client and `spikes-bot` prefer the
+  lottery when it is within their limits.
+- The difficulty is the ordinary puzzle's (one header hash costs about the
+  same), at most 30 bits so the nonce cannot run out; beyond that, or with
+  `argon2id`, or before the first job arrives, there is no lottery.
+- The gate checks an answer with a few SHA-256 runs, like the ordinary
+  puzzle. An answer that also clears the pool's share target is sent to the
+  pool (`mining.submit`); one that clears the network target is a block.
+- People play too: the [402 page](#the-402-page-for-people) puzzle runs on
+  the lottery header when there is one, and the page says so.
+- **The odds:** the network does about 10^21 hashes a second. A visit that
+  takes a browser 2 seconds is ~2 million hashes, a chance of about 3·10^-18
+  of a block. It is a lottery, honestly labelled, not income; the dashboard
+  shows the hashes played, the best hash and the chance so far.
+- Pools: any solo pool that speaks stratum v1 with your address as user
+  name, e.g. solo.ckpool.org or public-pool.io (they take a small fee on a
+  block). The header assembly is tested against a real mainnet block, and
+  the job parsing against live jobs of both pools.
+
 ## Bot identification
 
 On protected paths Spikes402 tries to tell who is asking, logs it (at most
@@ -572,8 +613,9 @@ The key is compared in constant time, kept only in the browser tab
 to steal or forge. The page is plain HTML/JS embedded in the binary, with a
 strict Content-Security-Policy and no outside resources.
 
-It is **one page**: the siege monitor (below), four numbers and a small
+The main page is the siege monitor (below), four numbers and a small
 Lightning light (green = fine, red = a problem; hover it for details).
+**Stats** (below) shows who visits, page by page and client by client.
 Everything else sits behind the discreet **Settings** link:
 
 - the few **webmaster settings** that can change while running: `price_sats`,
@@ -641,6 +683,43 @@ a keyed hash that changes on every restart (`v-3fa2c1d9e07b`), no query
 strings. Use `"admin.visitor_ips": "truncate"` for networks
 (`203.0.113.0/24`) or `"full"` for addresses. The animation respects
 "reduce motion".
+
+### Stats
+
+![Stats](docs/stats.png)
+
+Traffic over the last 24 hours, 7 or 30 days:
+
+- **numbers**: requests, page views (people and bots), `402` answers, the
+  share unlocked after a `402`, sats earned, the average time from `402` to
+  a valid proof, time on page and origin response time;
+- **charts** per hour (per day for 30 days): challenges (paid, work, not
+  unlocked, repelled) and page views (people, bots);
+- **who visits**: people, verified bots, bots and scripts, impostors;
+- **pages**: views, `402`s, unlocks, sats, time to unlock, time on page,
+  response time and distinct visitors per path (no query strings);
+- **Bitcoin lottery** (when on): hashes played, best hash, chance of a
+  block so far, shares and blocks, pool and payout address;
+- **clients**: one row per visitor and User-Agent, with kind, a short agent
+  name (`Chrome · Windows`, `GPTBot`, `HeadlessChrome`), requests, unlocks,
+  sats and last page. Filter by kind, search by visitor, agent or path.
+
+A visitor is a **person** when a browser sends a language and asks for HTML
+or returns the session cookie; a **bot** when its User-Agent says so (or it
+sends none, or it is a headless browser); verified bots and impostors come
+from the bot check. **Time on page** is estimated without any JavaScript on
+your site: the gap between two pages of the same person within 30 minutes
+(the last page of a visit has none). Page views count HTML pages the origin
+delivered, including unprotected ones, which only feed these statistics.
+
+Visitors appear as `admin.visitor_ips` says (with `"hash"` the keys change on
+restart, so the same visitor becomes a new row). Everything is aggregated as
+requests arrive and bounded (30 days of hours, 2,000 paths, 5,000 clients).
+It is saved every 30 seconds while it changes, atomically and with mode
+`0600`, in `state_dir` (`config.stats.json` for `config.json`). The first
+start can load an existing statistics file from next to the config.
+`GET /api/stats?range=24h|7d|30d&kind=` returns the
+same data as JSON, for the admin and the AI key.
 
 ## AI admin (MCP)
 
@@ -768,8 +847,9 @@ resp, err := c.Get(ctx, "https://example.com/premium/article")
 ```
 
 Paying needs a `client.Payer` (your wallet). Only a fake payer exists so far.
-The client solves both `sha256d` and `argon2id` puzzles and refuses ones
-that are too hard (`MaxDifficulty`, `MaxArgonDifficulty`, `MaxArgonMemoryMiB`).
+The client solves `sha256d`, `argon2id` and the [Bitcoin lottery](#bitcoin-lottery)
+puzzles and refuses ones that are too hard (`MaxDifficulty`,
+`MaxArgonDifficulty`, `MaxArgonMemoryMiB`).
 
 **Waiting for an external payment.** If you pay the invoice with a wallet
 that does not give you the preimage in the same process, poll the claim
@@ -910,6 +990,9 @@ mainnet, use only tiny amounts. [Try it](docs/try-the-wallet.md); build
 notes are in [extension/README.md](extension/README.md).
 
 ## Inspirations and thank you
+
+The proof-of-work in the browser follows [PoWned](https://github.com/gobrrrme/PoWned)
+by GoBrrr.
 
 Spikes402 is dedicated to the books and thinkers that shaped it:
 

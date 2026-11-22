@@ -53,8 +53,14 @@ func TestEvents(t *testing.T) {
 	rec := &recorder{}
 	f.gate.opt.Observer = rec.observe
 
-	f.get("/free/page", "", "") // unprotected: not an event
-	expect(t, rec)
+	f.get("/free/page", "", "") // unprotected: an "open" event, for statistics only
+	rec.mu.Lock()
+	open := rec.events[0]
+	rec.mu.Unlock()
+	if !open.Open || open.Status != http.StatusOK || open.Latency < 0 {
+		t.Fatalf("open event %+v", open)
+	}
+	expect(t, rec, OutcomeOpen)
 
 	b := f.challenge(t, "/premium/a")
 	expect(t, rec, OutcomeChallenged)
@@ -147,5 +153,26 @@ func TestStatus(t *testing.T) {
 	st = f.gate.Status()
 	if !st.Node.BreakerOpen || st.Node.InvoiceFailures != breakerThreshold || st.Node.LastError != "node error" {
 		t.Fatalf("got %+v", st.Node)
+	}
+}
+
+func TestObserverCountsThePaidPriceOnceAcrossARetry(t *testing.T) {
+	f := newFixture(t)
+	rec := &recorder{}
+	f.gate.opt.Observer = rec.observe
+	originCounter(t, f, func(call int) int {
+		if call == 1 {
+			return http.StatusBadGateway
+		}
+		return http.StatusOK
+	})
+	b := f.challenge(t, "/premium/a")
+	auth := f.pay(t, b)
+	f.get("/premium/a", auth, "")
+	f.get("/premium/a", auth, "")
+	paid, retry := rec.events[1], rec.events[2]
+	if paid.Outcome != OutcomePaid || paid.Price != b.PriceSats || paid.Status != http.StatusBadGateway ||
+		retry.Outcome != OutcomeRetry || retry.Status != http.StatusOK {
+		t.Fatalf("paid=%+v, retry=%+v", paid, retry)
 	}
 }

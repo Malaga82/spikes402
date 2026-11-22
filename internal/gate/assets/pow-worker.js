@@ -8,8 +8,10 @@
 // block compressions.
 //
 // In:  {challenge, difficulty, start}   (start: first nonce to try)
+//      or {header, difficulty, start, end} for the Bitcoin lottery (see solveHeader)
 // Out: {attempts}                       progress, every ~200 ms
 //      {attempts, nonce}                solved
+//      {attempts, exhausted}            lottery range done without a solution
 (function () {
 "use strict";
 var K = new Int32Array([
@@ -44,7 +46,46 @@ function compress(s, w) {
   s[4] = (s[4] + E) | 0; s[5] = (s[5] + F) | 0; s[6] = (s[6] + G) | 0; s[7] = (s[7] + H) | 0;
 }
 
+function bswap(x) { return (x >>> 24 | x >>> 8 & 0xff00 | x << 8 & 0xff0000 | x << 24) | 0; }
+
+// Bitcoin lottery: header is a real block header without its nonce (76
+// bytes, hex). Hash header + nonce (4 bytes, little-endian) twice and read
+// the digest as a little-endian number, as pow.HeaderHash does.
+function solveHeader(m) {
+  var bits = m.difficulty | 0, n = m.start >>> 0, end = m.end >>> 0, i, h = m.header;
+  var b = new Uint8Array(76);
+  for (i = 0; i < 76; i++) b[i] = parseInt(h.substr(2 * i, 2), 16);
+  var mid = new Int32Array(IV), w = new Int32Array(64), s = new Int32Array(8), s2 = new Int32Array(8), tw = new Int32Array(16);
+  for (i = 0; i < 16; i++) w[i] = b[4 * i] << 24 | b[4 * i + 1] << 16 | b[4 * i + 2] << 8 | b[4 * i + 3];
+  compress(mid, w);
+  for (i = 0; i < 3; i++) tw[i] = b[64 + 4 * i] << 24 | b[65 + 4 * i] << 16 | b[66 + 4 * i] << 8 | b[67 + 4 * i];
+  tw[4] = -2147483648; tw[15] = 640;
+  var zw = bits >>> 5, rb = bits & 31, attempts = 0, last = Date.now();
+  for (;;) {
+    tw[3] = bswap(n);
+    s.set(mid);
+    for (i = 0; i < 16; i++) w[i] = tw[i];
+    compress(s, w);
+    for (i = 0; i < 8; i++) w[i] = s[i];
+    w[8] = -2147483648; w[9] = 0; w[10] = 0; w[11] = 0; w[12] = 0; w[13] = 0; w[14] = 0; w[15] = 256;
+    s2.set(IV);
+    compress(s2, w);
+    attempts++;
+    var ok = true;
+    for (i = 0; i < zw; i++) if (s2[7 - i] !== 0) { ok = false; break; }
+    if (ok && rb && (bswap(s2[7 - zw]) >>> (32 - rb)) !== 0) ok = false;
+    if (ok) { self.postMessage({ attempts: attempts, nonce: n }); return; }
+    if (n === end) { self.postMessage({ attempts: attempts, exhausted: true }); return; }
+    n = (n + 1) >>> 0;
+    if ((attempts & 16383) === 0) {
+      var now = Date.now();
+      if (now - last >= 200) { last = now; self.postMessage({ attempts: attempts }); }
+    }
+  }
+}
+
 self.onmessage = function (e) {
+  if (e.data.header) return solveHeader(e.data);
   var m = e.data, bits = m.difficulty | 0, n = m.start, i, j;
   var prefix = new TextEncoder().encode(m.challenge + ":");
   var nfull = prefix.length >>> 6;

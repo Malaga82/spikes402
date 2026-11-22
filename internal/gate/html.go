@@ -72,7 +72,9 @@ or solve a math puzzle with your computer&rsquo;s power.</p>
 <h2>Solve the puzzle</h2>
 <p>Your browser searches for a number that unlocks this page: about {{.Attempts}} attempts, using your CPU.
 <noscript>This needs JavaScript.</noscript></p>
-<div id="pow-box" hidden data-challenge="{{.PoW.Challenge}}" data-difficulty="{{.PoW.Difficulty}}" data-worker="{{.WorkerSrc}}">
+{{if .Lottery}}<p><small>The puzzle is a real Bitcoin block header from this site&rsquo;s mining pool, so your work is also a lottery ticket for a whole block. The odds are tiny.</small></p>
+{{end}}
+<div id="pow-box" hidden data-challenge="{{.PoW.Challenge}}" data-difficulty="{{.PoW.Difficulty}}" data-worker="{{.WorkerSrc}}"{{with .Lottery}} data-lottery="{{.Challenge}}" data-header="{{.Header}}"{{end}}>
   <button type="button" id="pow-go">Solve the puzzle</button>
   <progress id="pow-bar" max="1" value="0" hidden></progress>
   <small id="pow-stats" aria-live="polite"></small>

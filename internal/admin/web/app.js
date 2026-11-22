@@ -48,7 +48,8 @@ async function login() {
     state.role = me.role;
     if (me.role !== "admin") $("login-error").textContent = "This key has the AI role: it can suggest changes; it may apply only those that do not reduce protection.";
     route();
-    state.timers.push(setInterval(pollSiege, 1000), setInterval(refresh, 5000));
+    state.timers.push(setInterval(pollSiege, 1000), setInterval(refresh, 5000),
+      setInterval(() => { if (!$("stats").hidden) loadStats(); }, 15000));
     pollSiege(); refresh();
     requestAnimationFrame(frame);
   } catch (e) { $("login-error").textContent = e.message; }
@@ -63,9 +64,11 @@ function logout(text) {
 }
 function route() {
   if (!state.key) return;
-  const settings = location.hash === "#settings";
-  $("siege").hidden = settings; $("settings").hidden = !settings; $("nav").hidden = settings;
-  if (settings) { loadSettings(); loadProposals(); loadWithdrawals(); }
+  const page = { "#settings": "settings", "#stats": "stats" }[location.hash] || "siege";
+  for (const id of ["siege", "stats", "settings"]) $(id).hidden = id !== page;
+  document.querySelectorAll("#nav a").forEach((a) => (a.dataset.page === page ? a.setAttribute("aria-current", "page") : a.removeAttribute("aria-current")));
+  if (page === "settings") { loadSettings(); loadProposals(); loadWithdrawals(); }
+  if (page === "stats") loadStats();
 }
 window.addEventListener("hashchange", route);
 $("login-form").addEventListener("submit", (e) => { e.preventDefault(); state.key = $("key").value.trim(); $("key").value = ""; login(); });
@@ -453,3 +456,177 @@ $("wd-sent").addEventListener("click", () => resolveWithdrawal(true));
 $("wd-notsent").addEventListener("click", () => resolveWithdrawal(false));
 
 if (state.key) login();
+
+// --- statistics ---
+state.range = "24h"; state.clients = [];
+const KINDS = [ // order and colour of the kinds of client
+  ["human", "People", "#3ddc84"], ["verified-bot", "Verified bots", "#00e5ff"], ["bot", "Bots and scripts", "#9aa3c7"],
+  ["impostor", "Impostors", "#ff4d6d"], ["unknown", "Unclassified", "#6b74a0"]];
+const KIND_LABEL = Object.fromEntries(KINDS.map(([k, l]) => [k, l]));
+const IPMODE = { hash: "visitors are keyed hashes (new ones after a restart)", truncate: "visitors are shown by network (/24, /48)", full: "visitors are shown by full address" };
+
+const avg = (sum, n) => (n ? sum / n : null);
+function dur(ms) {
+  if (ms === null || ms === undefined) return "–";
+  if (ms < 1000) return Math.round(ms) + " ms";
+  const s = ms / 1000;
+  if (s < 60) return s.toFixed(s < 10 ? 1 : 0) + " s";
+  return Math.floor(s / 60) + " min " + Math.round(s % 60) + " s";
+}
+const pct = (a, b) => (b ? Math.round((100 * a) / b) + "%" : "–");
+function cell(text, cls, title) { const td = el("td", text, cls); if (title) td.title = title; return td; }
+
+async function loadStats() {
+  let r;
+  try { r = await api("GET", "/api/stats?range=" + state.range + "&kind=" + encodeURIComponent($("cl-kind").value)); } catch { return; }
+  const t = r.totals;
+  $("st-note").textContent = "Collected since " + new Date(r.since).toLocaleString() + " · " + (IPMODE[r.visitor_ips] || IPMODE.hash);
+  $("k-req").textContent = fmt(t.requests);
+  $("k-views").textContent = fmt(t.page_views);
+  $("k-views-split").textContent = fmt(t.human_views) + " people · " + fmt(t.bot_views) + " bots";
+  $("k-ch").textContent = fmt(t.challenges);
+  $("k-rate").textContent = t.challenges ? Math.round(100 * r.unlock_rate) + "%" : "–";
+  $("k-sats").textContent = fmt(t.sats);
+  $("k-paid").textContent = fmt(t.paid) + " paid · " + fmt(t.pow) + " by work";
+  $("k-solve").textContent = dur(avg(t.solve_ms, t.solve_n));
+  $("k-solve90").textContent = "average, from 402 to proof · " + fmt(t.solve_n) + " timed";
+  $("k-dwell").textContent = t.dwell_n ? dur((1000 * t.dwell_s) / t.dwell_n) : "–";
+  $("k-lat").textContent = dur(avg(t.latency_ms, t.latency_n));
+
+  const day = r.range === "30d";
+  bars($("ch-chart"), r.series, day, [
+    ["paid ⚡", "#ffc83d", (b) => b.paid], ["did the work", "#00e5ff", (b) => b.pow],
+    ["402, not unlocked", "#9aa3c7", (b) => Math.max(0, b.challenges - b.paid - b.pow)], ["repelled", "#ff4d6d", (b) => b.repelled]]);
+  bars($("pv-chart"), r.series, day, [
+    ["people", "#3ddc84", (b) => b.human_views], ["bots", "#00e5ff", (b) => b.bot_views],
+    ["unclassified", "#9aa3c7", (b) => Math.max(0, b.page_views - b.human_views - b.bot_views)]]);
+  renderLottery(r.lottery);
+  renderKinds(r.kinds || {});
+  renderPages(r.pages || []);
+  state.clients = r.clients || []; state.clientsTotal = r.clients_total;
+  renderClients();
+}
+
+// bars draws a stacked bar chart: one bar per hour (or day), a title per bar for hover.
+function bars(svg, series, daily, layers) {
+  const W = 600, H = 200, L = 40, B = 22, T = 8, pw = W - L - 6, ph = H - B - T;
+  const totals = series.map((b) => layers.reduce((s, [, , f]) => s + f(b), 0));
+  const max = niceMax(Math.max(1, ...totals));
+  const n = series.length, bw = pw / n, gap = n > 60 ? 0.5 : 2;
+  const kids = [];
+  const svgEl = (tag, attrs, text) => {
+    const e = document.createElementNS(SVGNS, tag);
+    for (const k in attrs) e.setAttribute(k, attrs[k]);
+    if (text !== undefined) e.textContent = text;
+    return e;
+  };
+  for (const v of [0, max / 2, max]) {
+    const y = T + ph - (v / max) * ph;
+    kids.push(svgEl("line", { x1: L, x2: W - 6, y1: y, y2: y, class: "grid" }), svgEl("text", { x: L - 6, y: y + 4, "text-anchor": "end" }, fmt(v)));
+  }
+  series.forEach((b, i) => {
+    const x = L + i * bw;
+    let y = T + ph;
+    for (const [, color, f] of layers) {
+      const h = (f(b) / max) * ph;
+      if (h <= 0) continue;
+      y -= h;
+      kids.push(svgEl("rect", { x: x + gap / 2, y, width: Math.max(0.5, bw - gap), height: Math.max(0.5, h - (h > 3 ? 1 : 0)), fill: color }));
+    }
+    const d = new Date(b.hour * 1000);
+    const lbl = daily ? d.toLocaleDateString() : d.toLocaleString([], { weekday: n > 24 ? "short" : undefined, hour: "2-digit", minute: "2-digit" });
+    const hit = svgEl("rect", { x, y: T, width: bw, height: ph, class: "hit" });
+    hit.append(svgEl("title", {}, lbl + "\n" + layers.map(([name, , f]) => name + ": " + fmt(f(b))).join("\n")));
+    kids.push(hit);
+    const every = daily ? 5 : n > 24 ? 24 : 6;
+    const at = daily ? i % every === 0 : (n > 24 ? d.getHours() === 0 : i % every === 0);
+    if (at) kids.push(svgEl("text", { x: x + bw / 2, y: H - 6, "text-anchor": "middle" },
+      daily ? d.toLocaleDateString([], { day: "numeric", month: "short" }) : n > 24 ? d.toLocaleDateString([], { weekday: "short", day: "numeric" }) : d.getHours().toString().padStart(2, "0") + ":00"));
+  });
+  svg.replaceChildren(...kids);
+}
+function niceMax(v) {
+  const p = 10 ** Math.floor(Math.log10(v));
+  for (const m of [1, 2, 2.5, 5, 10]) if (m * p >= v) return m * p;
+  return 10 * p;
+}
+
+function renderKinds(kinds) {
+  const total = Object.values(kinds).reduce((s, k) => s + k.requests, 0) || 1;
+  $("kinds").replaceChildren(...KINDS.map(([k, label, color]) => {
+    const s = kinds[k] || { clients: 0, requests: 0, pages: 0, unlocks: 0, sats: 0 };
+    const row = el("div", null, "row");
+    const bar = el("div", null, "bar"), fill = el("i");
+    fill.style.width = (100 * s.requests) / total + "%"; fill.style.background = color;
+    bar.append(fill); bar.title = pct(s.requests, total) + " of requests";
+    row.append(el("span", label), bar, el("span", fmt(s.clients) + " clients · " + fmt(s.requests) + " req · " + fmt(s.pages) + " pages · " + fmt(s.unlocks) + " unlocks · " + fmt(s.sats) + " sats", "nums"));
+    return row;
+  }));
+}
+
+function renderPages(pages) {
+  const body = $("pages").tBodies[0];
+  if (!pages.length) { body.replaceChildren(emptyRow(10, "No pages yet.")); return; }
+  body.replaceChildren(...pages.map((p) => {
+    const tr = el("tr"), unl = p.paid + p.pow;
+    tr.append(cell(p.path, "path", p.path), cell(fmt(p.views), "n"), cell(fmt(p.challenges), "n"),
+      cell(fmt(unl), "n", fmt(p.paid) + " paid · " + fmt(p.pow) + " by work"), cell(pct(unl, p.challenges), "n"), cell(fmt(p.sats), "n"),
+      cell(dur(avg(p.solve_ms, p.solve_n)), "n"), cell(p.dwell_n ? dur((1000 * p.dwell_s) / p.dwell_n) : "–", "n", p.dwell_n ? p.dwell_n + " measured" : ""),
+      cell(dur(avg(p.latency_ms, p.latency_n)), "n"), cell(fmt(p.visitors), "n"));
+    return tr;
+  }));
+}
+
+function renderClients() {
+  const q = $("cl-search").value.trim().toLowerCase();
+  const list = state.clients.filter((c) => !q || [c.visitor, c.agent, c.bot, c.user_agent, c.last_path].some((v) => (v || "").toLowerCase().includes(q)));
+  $("cl-count").textContent = list.length + " shown" + (state.clientsTotal > state.clients.length ? " of the " + state.clients.length + " most recent (" + fmt(state.clientsTotal) + " in all)" : "");
+  const body = $("clients").tBodies[0];
+  if (!list.length) { body.replaceChildren(emptyRow(11, "No clients.")); return; }
+  body.replaceChildren(...list.map((c) => {
+    const tr = el("tr");
+    const kind = el("td"); kind.append(el("span", KIND_LABEL[c.kind] || c.kind, "tag " + c.kind));
+    const agent = c.bot && c.bot.toLowerCase() !== (c.agent || "").toLowerCase() ? c.agent + " (" + c.bot + ")" : c.agent;
+    tr.append(cell(c.visitor, "path", c.class ? "class: " + c.class : ""), kind, cell(agent, "path", c.user_agent || "no User-Agent"),
+      cell(fmt(c.requests), "n"), cell(fmt(c.pages), "n"), cell(fmt(c.challenges), "n"),
+      cell(fmt(c.paid + c.pow), "n", fmt(c.paid) + " paid · " + fmt(c.pow) + " by work"), cell(fmt(c.sats), "n"),
+      cell(dur(avg(c.solve_ms, c.solve_n)), "n"), cell(c.last_path, "path", c.last_path), cell(ago(c.last_seen), "", new Date(c.last_seen).toLocaleString()));
+    return tr;
+  }));
+}
+function emptyRow(span, text) { const tr = el("tr"), td = el("td", text, "note"); td.colSpan = span; tr.append(td); return tr; }
+function ago(t) {
+  const s = (Date.now() - Date.parse(t)) / 1000;
+  if (s < 60) return "just now";
+  if (s < 3600) return Math.floor(s / 60) + " min ago";
+  if (s < 86400) return Math.floor(s / 3600) + " h ago";
+  return new Date(t).toLocaleDateString();
+}
+
+document.querySelectorAll("[data-range]").forEach((b) => b.addEventListener("click", () => {
+  state.range = b.dataset.range;
+  document.querySelectorAll("[data-range]").forEach((x) => x.setAttribute("aria-pressed", x === b));
+  loadStats();
+}));
+$("cl-kind").addEventListener("change", loadStats);
+$("cl-search").addEventListener("input", renderClients);
+
+// --- Bitcoin lottery ---
+function big(n) {
+  if (!n) return "0";
+  if (n < 1) return n.toPrecision(2);
+  const u = [["E", 1e18], ["P", 1e15], ["T", 1e12], ["G", 1e9], ["M", 1e6], ["k", 1e3]].find(([, v]) => n >= v);
+  return u ? (n / u[1]).toFixed(n / u[1] < 10 ? 1 : 0) + " " + u[0] : fmt(n);
+}
+function renderLottery(l) {
+  $("lottery").hidden = !l;
+  if (!l) return;
+  $("l-hashes").textContent = big(l.hashes);
+  $("l-best").textContent = l.best_difficulty ? big(l.best_difficulty) : "–";
+  $("l-chance").textContent = l.chance > 0 ? "1 in " + big(1 / l.chance) : "–";
+  $("l-blocks").textContent = fmt(l.blocks);
+  $("l-shares").textContent = fmt(l.shares_accepted) + " shares accepted of " + fmt(l.shares_submitted);
+  $("l-note").textContent = (l.connected ? "Connected to " : "Not connected to ") + l.pool + " · payout " + l.user +
+    (l.height ? " · mining block " + fmt(l.height) : "") + (l.network_difficulty ? " · network difficulty " + big(l.network_difficulty) : "") +
+    (l.pool_difficulty ? " · pool share difficulty " + big(l.pool_difficulty) : "") + (l.last_error ? " · last error: " + l.last_error : "");
+}

@@ -1,0 +1,18 @@
+{
+  "listen": "127.0.0.1:8402",
+  "origin": "http://localhost:8080",
+  "price_sats": 1,
+  "protect": ["/premium/**"],
+  "pow_seconds_per_sat": 10,
+  "lottery": {
+    "pool": "solo.ckpool.org:3333",
+    "address": "YOUR_BITCOIN_ADDRESS",
+    "worker": "spikes402"
+  },
+  "admin": {
+    "key": "CHANGE_ME_TO_A_LONG_RANDOM_KEY_AT_LEAST_32_CHARS"
+  },
+  "lightning": {
+    "backend": "fake"
+  }
+}

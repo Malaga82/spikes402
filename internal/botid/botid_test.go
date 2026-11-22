@@ -56,6 +56,21 @@ func req(ua string) *http.Request {
 
 const googleUA = "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)"
 
+func TestGoogleCrawlersUseTheirOwnPublishedRanges(t *testing.T) {
+	c := New(DefaultBots, nil)
+	c.resolver = &fakeDNS{}
+	c.SetRanges("Googlebot", []netip.Prefix{netip.MustParsePrefix("192.0.2.0/24")})
+	c.SetRanges("AdsBot-Google", []netip.Prefix{netip.MustParsePrefix("198.51.100.0/24")})
+	got := c.Classify(req("AdsBot-Google-Mobile"), net.ParseIP("198.51.100.10"), "https")
+	if got.Kind != Verified || got.Name != "AdsBot-Google" || got.Method != "ip-list" {
+		t.Fatalf("special crawler: %+v", got)
+	}
+	got = c.Classify(req(googleUA), net.ParseIP("192.0.2.10"), "https")
+	if got.Kind != Verified || got.Name != "Googlebot" || got.Method != "ip-list" {
+		t.Fatalf("common crawler: %+v", got)
+	}
+}
+
 func TestIPListClassification(t *testing.T) {
 	c := New(bots, nil)
 	c.SetRanges("GPTBot", []netip.Prefix{netip.MustParsePrefix("20.0.0.0/24"), netip.MustParsePrefix("2001:db8::/32")})
@@ -88,10 +103,12 @@ func TestReverseDNSWhenNoList(t *testing.T) {
 			"66.249.66.1": {"crawl-66-249-66-1.googlebot.com."},
 			"6.6.6.6":     {"crawl.googlebot.com.evil.test."},
 			"7.7.7.7":     {"fake.googlebot.com."}, // PTR set by the attacker, forward does not confirm
+			"34.1.1.1":    {"crawl-34-1-1-1.googlebot.com."},
 		},
 		a: map[string][]string{
 			"crawl-66-249-66-1.googlebot.com": {"66.249.66.1"},
 			"fake.googlebot.com":              {"66.249.66.99"},
+			"crawl-34-1-1-1.googlebot.com":    {"34.1.1.1"},
 		},
 	}
 	c.resolver = dns
@@ -110,6 +127,13 @@ func TestReverseDNSWhenNoList(t *testing.T) {
 	c.SetRanges("Googlebot", []netip.Prefix{netip.MustParsePrefix("66.249.64.0/19")})
 	if got := c.Classify(req(googleUA), net.ParseIP("66.249.66.2"), "https"); got.Kind != Verified || got.Method != "ip-list" {
 		t.Fatalf("got %v", got)
+	}
+	// Outside the list, reverse DNS can still confirm a common crawler.
+	if got := c.Classify(req(googleUA), net.ParseIP("34.1.1.1"), "https"); got.Kind != Verified || got.Method != "reverse-dns" {
+		t.Fatalf("outside the list, good PTR: got %v", got)
+	}
+	if got := c.Classify(req(googleUA), net.ParseIP("6.6.6.6"), "https"); got.Kind != Impostor {
+		t.Fatalf("outside the list, bad PTR: got %v", got)
 	}
 }
 

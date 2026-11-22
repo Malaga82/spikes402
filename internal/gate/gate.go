@@ -3,6 +3,7 @@
 package gate
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
@@ -71,6 +72,10 @@ type Options struct {
 	// the already-loaded contents (so New does not fail on a bad store).
 	SpentStore   SpentStore
 	SpentRecords []persist.SpentRecord
+
+	// Lottery, if set, offers sha256d work on real Bitcoin block headers from a
+	// solo pool, so every proof is also a lottery ticket (see lottery.go).
+	Lottery Lottery
 }
 
 // PriceRule maps a path pattern (same syntax as Protect) to a price.
@@ -164,8 +169,16 @@ func (g *Gate) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad path: "+why, http.StatusBadRequest)
 		return
 	}
+	if g.opt.Observer != nil { // details for the statistics, filled in as the request goes
+		r = r.WithContext(context.WithValue(r.Context(), infoKey{}, &reqInfo{session: session}))
+	}
 	if !g.protected(r.URL.Path, set) {
-		g.opt.Next.ServeHTTP(w, r)
+		if g.opt.Observer == nil {
+			g.opt.Next.ServeHTTP(w, r)
+			return
+		}
+		g.forward(w, r)
+		g.observe(r, botid.Class{Kind: botid.Unknown}, OutcomeOpen)
 		return
 	}
 	// A shared cache or CDN must not store a 402, a paid page, or a
@@ -175,9 +188,9 @@ func (g *Gate) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	class := g.classify(r)
 	w.Header().Set(ClassHeader, class.String())
 	if set.Paused {
-		g.observe(r, class, OutcomeFree)
 		r.Header.Del("Authorization")
-		g.opt.Next.ServeHTTP(w, r)
+		g.forward(w, r)
+		g.observe(r, class, OutcomeFree)
 		return
 	}
 	pol := g.policyFor(set, class)
@@ -187,14 +200,15 @@ func (g *Gate) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	case ActionFree:
-		g.observe(r, class, OutcomeFree)
 		r.Header.Del("Authorization")
-		g.opt.Next.ServeHTTP(w, r)
+		g.forward(w, r)
+		g.observe(r, class, OutcomeFree)
 		return
 	}
 	// A pass (see pass.go) is a payment already made for this very page.
 	if resHash := hashResource(resource(r)); r.Header.Get("Authorization") == "" && g.validPass(passes[passName(resHash)], resHash) {
-		g.opt.Next.ServeHTTP(w, r)
+		g.forward(w, r)
+		g.observe(r, class, OutcomePass)
 		return
 	}
 	price := pol.price(g.offerPrice(r.URL.Path, set))
@@ -205,23 +219,30 @@ func (g *Gate) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	var problem string
 	if auth := r.Header.Get("Authorization"); auth != "" {
-		id, err := g.redeem(r, auth, price)
+		c, first, err := g.redeem(r, auth, price)
 		if err == nil {
 			outcome := OutcomePaid
 			scheme, _, _ := strings.Cut(auth, " ")
 			if strings.EqualFold(scheme, "PoW") {
 				outcome = OutcomePoW
 			}
-			g.observe(r, class, outcome)
-			g.pending.drop(id)
+			if !first {
+				outcome = OutcomeRetry
+			}
+			if ri := info(r); ri != nil {
+				ri.token, ri.price = c.ID, c.PriceSats
+			}
+			g.pending.drop(c.ID)
 			r.Header.Del("Authorization") // our credential, not the origin's business
 			redeem := r.Header.Get(RedeemHeader)
 			r.Header.Del(RedeemHeader)
 			if redeem == redeemCookie && r.Method == http.MethodGet {
-				g.issuePass(w, r, id) // the page navigates next; the origin is not called yet
+				g.issuePass(w, r, c.ID) // the page navigates next; the origin is not called yet
+				g.observe(r, class, outcome)
 				return
 			}
-			g.deliver(w, r, id, scheme)
+			g.deliver(w, r, c.ID, scheme)
+			g.observe(r, class, outcome)
 			return
 		}
 		var busy *busyError
@@ -246,15 +267,27 @@ func (g *Gate) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // should not lose a payment to a hiccup of the site. Other methods may have
 // changed something at the origin, so they never get a second try.
 func (g *Gate) deliver(w http.ResponseWriter, r *http.Request, id, scheme string) {
-	if r.Method != http.MethodGet && r.Method != http.MethodHead {
-		g.opt.Next.ServeHTTP(w, r)
-		return
-	}
-	rec := &statusRecorder{ResponseWriter: w}
-	g.opt.Next.ServeHTTP(rec, r)
-	if rec.status >= 500 {
+	status := g.forward(w, r)
+	if status >= 500 && (r.Method == http.MethodGet || r.Method == http.MethodHead) {
 		g.spent.release(spentKey(scheme, id), g.now())
 	}
+}
+
+// forward sends r to the origin and returns its status (200 if it wrote a
+// body without one). With an Observer it also notes the response time and
+// content type for the statistics.
+func (g *Gate) forward(w http.ResponseWriter, r *http.Request) int {
+	rec := &statusRecorder{ResponseWriter: w}
+	start := time.Now()
+	g.opt.Next.ServeHTTP(rec, r)
+	status := rec.status
+	if status == 0 {
+		status = http.StatusOK
+	}
+	if ri := info(r); ri != nil {
+		ri.status, ri.latency, ri.ctype = status, time.Since(start), w.Header().Get("Content-Type")
+	}
+	return status
 }
 
 // protectedCacheControl is set on every response for a protected path.
@@ -274,7 +307,7 @@ type cacheControlWriter struct {
 }
 
 func (w *cacheControlWriter) WriteHeader(code int) {
-	if !w.wrote {
+	if code >= 200 && !w.wrote {
 		w.Header().Set("Cache-Control", w.value)
 		w.wrote = true
 	}
@@ -404,20 +437,24 @@ func (e *busyError) Error() string { return e.msg }
 // paid the invoice can still use it once even if the puzzle of the same
 // offer was already solved (or burned by a wrong Argon2id answer), so a
 // paid invoice is never worthless. Work after payment is refused.
-func (g *Gate) redeem(r *http.Request, auth string, price int64) (string, error) {
-	c, err := g.check(r, auth, price)
+func (g *Gate) redeem(r *http.Request, auth string, price int64) (claims, bool, error) {
+	c, record, err := g.check(r, auth, price)
 	if err != nil {
-		return "", err
+		return claims{}, false, err
 	}
 	scheme, _, _ := strings.Cut(auth, " ")
 	if strings.EqualFold(scheme, "PoW") && g.spent.has(spentKey("L402", c.ID)) {
-		return "", errReplay
+		return claims{}, false, errReplay
 	}
 	// Checked last, so a bad attempt does not burn a good token.
-	if err := g.spent.use(spentKey(scheme, c.ID), time.Unix(c.Expires, 0), g.now()); err != nil {
-		return "", err
+	first, err := g.spent.useFirst(spentKey(scheme, c.ID), time.Unix(c.Expires, 0), g.now())
+	if err != nil {
+		return claims{}, false, err
 	}
-	return c.ID, nil
+	if first && record != nil {
+		record()
+	}
+	return c, first, nil
 }
 
 // spentKey is the entry in the spent set for one way of redeeming a token.
@@ -429,24 +466,24 @@ func spentKey(scheme, id string) string {
 }
 
 // check verifies a credential without spending it.
-func (g *Gate) check(r *http.Request, auth string, price int64) (claims, error) {
+func (g *Gate) check(r *http.Request, auth string, price int64) (claims, func(), error) {
 	scheme, cred, _ := strings.Cut(auth, " ")
 	token, proof, ok := strings.Cut(strings.TrimSpace(cred), ":")
 	if !ok {
-		return claims{}, errBadToken
+		return claims{}, nil, errBadToken
 	}
 	c, err := g.sign.verify(token)
 	if err != nil {
-		return claims{}, err
+		return claims{}, nil, err
 	}
 	if g.now().Unix() >= c.Expires {
-		return claims{}, errExpired
+		return claims{}, nil, errExpired
 	}
 	if c.Resource != hashResource(resource(r)) {
-		return claims{}, errWrongTarget
+		return claims{}, nil, errWrongTarget
 	}
 	if c.Kind != "" { // a pass is not a token
-		return claims{}, errBadToken
+		return claims{}, nil, errBadToken
 	}
 
 	switch strings.ToUpper(scheme) {
@@ -454,33 +491,40 @@ func (g *Gate) check(r *http.Request, auth string, price int64) (claims, error) 
 		preimage, err := hex.DecodeString(proof)
 		want, err2 := hex.DecodeString(c.PaymentHash)
 		if err != nil || err2 != nil || len(preimage) != 32 || len(want) != 32 {
-			return claims{}, errBadProof
+			return claims{}, nil, errBadProof
 		}
 		got := sha256.Sum256(preimage)
 		if subtle.ConstantTimeCompare(got[:], want) != 1 {
-			return claims{}, errBadProof
+			return claims{}, nil, errBadProof
 		}
 	case "POW":
 		// The work was priced when the token was issued; it must still cover
 		// today's price. (A token without a price, from an older version, never does.)
 		if c.PriceSats < price {
-			return claims{}, errWrongPrice
+			return claims{}, nil, errWrongPrice
 		}
 		nonce, err := strconv.ParseUint(proof, 10, 64)
+		if c.PowAlg == pow.Bitcoin {
+			if err != nil || nonce > 0xFFFFFFFF {
+				return claims{}, nil, errBadProof
+			}
+			record, err := g.checkLottery(c, uint32(nonce))
+			return c, record, err
+		}
 		p := c.powParams()
 		if err != nil || p.Validate() != nil {
-			return claims{}, errBadProof
+			return claims{}, nil, errBadProof
 		}
 		if p.Algorithm == pow.Argon2id {
-			return c, g.checkArgon(r, p, token, nonce, c)
+			return c, nil, g.checkArgon(r, p, token, nonce, c)
 		}
 		if !p.Check(token, nonce) {
-			return claims{}, errBadProof
+			return claims{}, nil, errBadProof
 		}
 	default:
-		return claims{}, errScheme
+		return claims{}, nil, errScheme
 	}
-	return c, nil
+	return c, nil, nil
 }
 
 // checkArgon verifies an Argon2id solution. A check costs the server tens
@@ -511,14 +555,15 @@ func (g *Gate) checkArgon(r *http.Request, p pow.Params, token string, nonce uin
 
 // challengeBody is the JSON answer to an unpaid request.
 type challengeBody struct {
-	Error     string     `json:"error"`
-	Problem   string     `json:"problem,omitempty"`
-	Resource  string     `json:"resource"`
-	PriceSats int64      `json:"price_sats"`
-	ExpiresAt time.Time  `json:"expires_at"`
-	L402      *l402Offer `json:"l402,omitempty"`
-	PoW       powOffer   `json:"pow"`
-	Preview   *Preview   `json:"preview,omitempty"` // teaser, if the site configured one
+	Error     string        `json:"error"`
+	Problem   string        `json:"problem,omitempty"`
+	Resource  string        `json:"resource"`
+	PriceSats int64         `json:"price_sats"`
+	ExpiresAt time.Time     `json:"expires_at"`
+	L402      *l402Offer    `json:"l402,omitempty"`
+	PoW       powOffer      `json:"pow"`
+	Preview   *Preview      `json:"preview,omitempty"` // teaser, if the site configured one
+	Lottery   *lotteryOffer `json:"lottery,omitempty"`
 }
 
 type l402Offer struct {
@@ -577,12 +622,15 @@ func (g *Gate) challenge(w http.ResponseWriter, r *http.Request, set *Settings, 
 			return
 		}
 	}
+	if ri := info(r); ri != nil {
+		ri.token, ri.price, ri.alg = o.id, o.price, o.pow.Algorithm
+	}
 	if problem != "" {
 		g.observe(r, class, OutcomeRejected)
 	} else {
 		g.observe(r, class, OutcomeChallenged)
 	}
-	g.writeChallenge(w, r, o, problem)
+	g.writeChallenge(w, r, o, problem, g.newLotteryOffer(r, now, o.pow, price))
 }
 
 // newOffer creates a token and, if there is room, an invoice.
@@ -636,7 +684,7 @@ func (g *Gate) newOffer(r *http.Request, now time.Time, key string, p pow.Params
 	return o, nil
 }
 
-func (g *Gate) writeChallenge(w http.ResponseWriter, r *http.Request, o offer, problem string) {
+func (g *Gate) writeChallenge(w http.ResponseWriter, r *http.Request, o offer, problem string, lo *lotteryOffer) {
 	body := challengeBody{
 		Error:     "payment required",
 		Problem:   problem,
@@ -670,6 +718,10 @@ func (g *Gate) writeChallenge(w http.ResponseWriter, r *http.Request, o offer, p
 		}
 	}
 	h.Add("WWW-Authenticate", powHeader)
+	if lo != nil { // after the ordinary puzzle, so older clients keep solving that
+		body.Lottery = lo
+		h.Add("WWW-Authenticate", lo.header())
+	}
 	h.Set("Cache-Control", protectedCacheControl)
 
 	if strings.Contains(r.Header.Get("Accept"), "text/html") {

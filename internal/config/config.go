@@ -96,6 +96,8 @@ type Config struct {
 
 	Admin    Admin    `json:"admin"`
 	Withdraw Withdraw `json:"withdraw"`
+
+	Lottery Lottery `json:"lottery"` // sha256d work on real Bitcoin block headers (see lottery.go)
 }
 
 // Admin configures the admin API and dashboard. It is off unless a key is set.
@@ -310,6 +312,9 @@ func (c *Config) complete() error {
 		}
 	default:
 		return errors.New(`"pow_algorithm" must be "sha256d" or "argon2id"`)
+	}
+	if err := c.checkLottery(); err != nil {
+		return err
 	}
 	if c.Argon2MaxMemoryMiB == 0 {
 		c.Argon2MaxMemoryMiB = gate.DefaultArgonMaxMemoryMiB

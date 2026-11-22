@@ -4,12 +4,15 @@
 package admin
 
 import (
+	"context"
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"net"
 	"net/url"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -61,22 +64,29 @@ type Monitor struct {
 	ring   [ringSize]Visit
 	next   uint64 // sequence number of the next visit (first is 1)
 	counts Counts
+
+	stats *Stats
 }
 
 // NewMonitor returns an empty monitor.
 func NewMonitor(visitorIPs string, now time.Time) *Monitor {
 	salt := make([]byte, 32)
 	rand.Read(salt)
-	return &Monitor{mode: visitorIPs, salt: salt, next: 1, counts: Counts{
+	return &Monitor{mode: visitorIPs, salt: salt, next: 1, stats: newStats(now), counts: Counts{
 		Since: now, ByOutcome: map[string]uint64{}, ByClass: map[string]uint64{}, ByBot: map[string]uint64{},
 	}}
 }
 
 // Observe is a gate.Options.Observer.
 func (m *Monitor) Observe(e gate.Event) {
+	visitor := m.anonymise(e.IP, e.Client)
+	m.stats.add(e, visitor)
+	if e.Open { // unprotected paths feed the statistics only, not the siege view
+		return
+	}
 	v := Visit{
 		Time:    e.Time.UTC(),
-		Visitor: m.anonymise(e.IP, e.Client),
+		Visitor: visitor,
 		Class:   string(e.Class.Kind),
 		Bot:     botName(e.Class),
 		Path:    cleanPath(e.Resource),
@@ -193,4 +203,24 @@ func truncate(s string, n int) string {
 		return s
 	}
 	return string([]rune(s)[:n-1]) + "…"
+}
+
+// Stats returns the statistics report for rng ("24h", "7d", "30d"), with the
+// clients table filtered to kind ("" for all).
+func (m *Monitor) Stats(rng, kind string, now time.Time) Report {
+	return m.stats.report(rng, kind, m.mode, now)
+}
+
+// PersistStats loads the statistics saved at path and keeps saving them
+// there every 30 seconds while they change.
+// shortcut: no save on shutdown (the process exits through log.Fatal), so up to 30 s are lost; add one if graceful shutdown arrives.
+func (m *Monitor) PersistStats(path, legacyPath string, logf func(string, ...any)) {
+	source := path
+	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
+		source = legacyPath
+	}
+	if err := m.stats.load(source, time.Now()); err != nil {
+		logf("admin: statistics in %s not loaded: %v", source, err)
+	}
+	go m.stats.run(context.Background(), path, 30*time.Second, logf)
 }

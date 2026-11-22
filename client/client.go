@@ -7,6 +7,7 @@ package client
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -91,7 +92,7 @@ func find(cs []Challenge, scheme string) (Challenge, bool) {
 	return Challenge{}, false
 }
 
-// Get fetches url, answering a 402 challenge once if needed.
+// Get fetches url, answering a 402 challenge if needed.
 func (c *Client) Get(ctx context.Context, url string) (*http.Response, error) {
 	resp, err := c.do(ctx, url, "")
 	if err != nil || resp.StatusCode != http.StatusPaymentRequired {
@@ -101,10 +102,6 @@ func (c *Client) Get(ctx context.Context, url string) (*http.Response, error) {
 	io.Copy(io.Discard, resp.Body)
 	resp.Body.Close()
 
-	auth, err := c.answer(ctx, challenges)
-	if err != nil {
-		return nil, err
-	}
 	// Retry the URL we actually landed on (after redirects). A cross-host
 	// redirect on the first request would otherwise send the proof back
 	// to the original host, which would bounce us again without the header.
@@ -112,14 +109,50 @@ func (c *Client) Get(ctx context.Context, url string) (*http.Response, error) {
 	if resp.Request != nil && resp.Request.URL != nil {
 		retry = resp.Request.URL.String()
 	}
+	if c.Mode == ModePoW {
+		if token, lot, ok := c.lottery(challenges); ok {
+			auth, err := c.answerLottery(ctx, token, lot)
+			if err == nil {
+				resp, err = c.do(ctx, retry, auth)
+				if err != nil || resp.StatusCode != http.StatusPaymentRequired {
+					return resp, err
+				}
+				// The job can expire while we work. Use the ordinary puzzle from the new offer.
+				challenges = ParseChallenges(resp.Header)
+				if _, ok := ordinaryPoW(challenges); !ok {
+					return resp, nil
+				}
+				io.Copy(io.Discard, resp.Body)
+				resp.Body.Close()
+				if resp.Request != nil && resp.Request.URL != nil {
+					retry = resp.Request.URL.String()
+				}
+			} else if ctx.Err() != nil {
+				return nil, err
+			}
+		}
+	}
+	auth, err := c.answer(ctx, challenges)
+	if err != nil {
+		return nil, err
+	}
 	return c.do(ctx, retry, auth)
+}
+
+func ordinaryPoW(challenges []Challenge) (Challenge, bool) {
+	for _, ch := range challenges {
+		if strings.EqualFold(ch.Scheme, "PoW") && ch.Params["algorithm"] != pow.Bitcoin {
+			return ch, true
+		}
+	}
+	return Challenge{}, false
 }
 
 // answer turns a 402 challenge into an Authorization header value.
 func (c *Client) answer(ctx context.Context, challenges []Challenge) (string, error) {
 	switch c.Mode {
 	case ModePoW:
-		ch, ok := find(challenges, "PoW")
+		ch, ok := ordinaryPoW(challenges)
 		if !ok {
 			return "", errors.New("server offered no proof-of-work challenge")
 		}
@@ -152,6 +185,48 @@ func (c *Client) answer(ctx context.Context, challenges []Challenge) (string, er
 		return "L402 " + ch.Params["macaroon"] + ":" + preimage, nil
 	}
 	return "", fmt.Errorf("unknown mode %q", c.Mode)
+}
+
+// lottery finds a Bitcoin lottery challenge (see the README's "Bitcoin
+// lottery") that is within MaxDifficulty.
+func (c *Client) lottery(challenges []Challenge) (string, pow.BitcoinWork, bool) {
+	limit := c.MaxDifficulty
+	if limit == 0 {
+		limit = 28
+	}
+	for _, ch := range challenges {
+		if !strings.EqualFold(ch.Scheme, "PoW") || ch.Params["algorithm"] != pow.Bitcoin {
+			continue
+		}
+		bits, err1 := strconv.Atoi(ch.Params["difficulty"])
+		header, err2 := hex.DecodeString(ch.Params["header"])
+		w := pow.BitcoinWork{Header: header, Bits: bits}
+		if err1 == nil && err2 == nil && w.Validate() == nil && bits <= limit && ch.Params["challenge"] != "" {
+			return ch.Params["challenge"], w, true
+		}
+	}
+	return "", pow.BitcoinWork{}, false
+}
+
+// answerLottery solves a Bitcoin lottery challenge.
+func (c *Client) answerLottery(ctx context.Context, token string, w pow.BitcoinWork) (string, error) {
+	c.logf("402: solving the Bitcoin lottery puzzle (difficulty %d, ~%.1f s on one CPU core): a real block header...",
+		w.Bits, pow.Params{Algorithm: pow.SHA256d, Difficulty: w.Bits}.ExpectedSeconds())
+	nonce, err := w.Solve(ctx, 0)
+	if err != nil {
+		return "", err
+	}
+	c.logf("402: solved, nonce=%d, block hash %x...", nonce, reversedPrefix(pow.HeaderHash(w.Header, nonce), 8))
+	return "PoW " + token + ":" + strconv.FormatUint(uint64(nonce), 10), nil
+}
+
+// reversedPrefix is the start of a hash as Bitcoin shows it.
+func reversedPrefix(h [32]byte, n int) []byte {
+	out := make([]byte, n)
+	for i := range out {
+		out[i] = h[31-i]
+	}
+	return out
 }
 
 // puzzle reads the PoW challenge and checks it is within our limits.

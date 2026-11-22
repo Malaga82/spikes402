@@ -21,9 +21,11 @@ type claims struct {
 	PriceSats   int64  `json:"sats"`          // price at issue; PoW must still cover today's price (see check)
 	Expires     int64  `json:"exp"`           // unix seconds
 	PowBits     int    `json:"pow"`           // proof-of-work difficulty
-	PowAlg      string `json:"alg,omitempty"` // "" (sha256d) or "argon2id"
+	PowAlg      string `json:"alg,omitempty"` // "" (sha256d), "argon2id" or "bitcoin"
 	PowMem      int    `json:"mem,omitempty"` // Argon2id memory in MiB
 	Kind        string `json:"k,omitempty"`   // "" for a challenge token, "pass" for the access cookie (see pass.go)
+	LotJob      uint32 `json:"lj,omitempty"`  // Bitcoin lottery: the pool job (see lottery.go)
+	LotEn2      uint64 `json:"le,omitempty"`  // Bitcoin lottery: the extranonce2 that makes this token's header
 }
 
 func (c claims) powParams() pow.Params {

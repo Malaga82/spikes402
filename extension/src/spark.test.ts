@@ -56,6 +56,21 @@ describe("spark backend send", () => {
     expect(err).not.toBeInstanceOf(PaymentPendingError);
     expect((err as Error).message).toMatch(/failed/);
   });
+
+  it("keeps a request pending when its status check is interrupted", async () => {
+    wallet.getLightningSendRequest.mockRejectedValueOnce(new Error("connection reset"));
+    const { sparkBackend } = await import("./spark");
+    await expect(sparkBackend.send(invoice)).rejects.toMatchObject({
+      name: "PaymentPendingError",
+      requestId: "req-1",
+    });
+  });
+
+  it("keeps an interrupted send pending even without a request id", async () => {
+    wallet.payLightningInvoice.mockRejectedValueOnce(new Error("connection reset"));
+    const { sparkBackend } = await import("./spark");
+    await expect(sparkBackend.send(invoice)).rejects.toBeInstanceOf(PaymentPendingError);
+  });
 });
 
 describe("spark backend send speed", () => {
@@ -80,6 +95,8 @@ describe("spark backend send speed", () => {
 describe("spark backend lookupSend", () => {
   it("tells settled, failed and pending apart", async () => {
     const { sparkBackend } = await import("./spark");
+    expect(await sparkBackend.lookupSend("req-1", invoice)).toEqual({ state: "pending" });
+    wallet.getLightningSendRequest.mockResolvedValue({ status: "PENDING_USER_SWAP_RETURN" });
     expect(await sparkBackend.lookupSend("req-1", invoice)).toEqual({ state: "pending" });
     wallet.getLightningSendRequest.mockResolvedValue({ status: "TRANSFER_FAILED" });
     expect(await sparkBackend.lookupSend("req-1", invoice)).toEqual({ state: "failed" });

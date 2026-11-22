@@ -12,7 +12,7 @@
 <header>
   <h1>⚡ Spikes402</h1>
   <span id="node" class="node" hidden><i></i><span id="node-text">Lightning</span></span>
-  <a href="#settings" id="nav" hidden>Settings</a>
+  <nav id="nav" hidden><a href="#" data-page="siege">Monitor</a><a href="#stats" data-page="stats">Stats</a><a href="#settings" data-page="settings">Settings</a></nav>
 </header>
 
 <main>
@@ -52,6 +52,76 @@
     <summary>Last 10 visits</summary>
     <table id="feed"></table>
   </details>
+</section>
+
+<section id="stats" class="page" hidden>
+  <div class="toolbar">
+    <div class="seg" role="group" aria-label="Time range">
+      <button type="button" data-range="24h" aria-pressed="true">24 hours</button>
+      <button type="button" data-range="7d" aria-pressed="false">7 days</button>
+      <button type="button" data-range="30d" aria-pressed="false">30 days</button>
+    </div>
+    <span id="st-note" class="note"></span>
+  </div>
+  <div class="stats kpi">
+    <div><b id="k-req">0</b>requests</div>
+    <div><b id="k-views">0</b>page views <small id="k-views-split"></small></div>
+    <div><b id="k-ch">0</b>challenges (402)</div>
+    <div><b id="k-rate">–</b>unlocked after a 402</div>
+    <div class="paid"><b id="k-sats">0</b>sats earned <small id="k-paid"></small></div>
+    <div class="pow"><b id="k-solve">–</b>time to unlock <small id="k-solve90"></small></div>
+    <div><b id="k-dwell">–</b>time on page <small>people only, estimated from the next page</small></div>
+    <div><b id="k-lat">–</b>origin response <small>average</small></div>
+  </div>
+  <div class="card lottery" id="lottery" hidden>
+    <h2>Bitcoin lottery</h2>
+    <div class="stats kpi">
+      <div class="paid"><b id="l-hashes">0</b>hashes played <small>by visitors and bots, all time</small></div>
+      <div><b id="l-best">–</b>best hash <small>as a share difficulty</small></div>
+      <div><b id="l-chance">–</b>chance of a block so far</div>
+      <div><b id="l-blocks">0</b>blocks found <small id="l-shares"></small></div>
+    </div>
+    <p class="note" id="l-note"></p>
+  </div>
+  <div class="grid2">
+    <div class="card">
+      <h2>Challenges</h2>
+      <p class="legend"><span><i class="paid"></i>paid ⚡</span><span><i class="pow"></i>did the work</span><span><i class="held"></i>402, not unlocked</span><span><i class="repelled"></i>repelled</span></p>
+      <svg id="ch-chart" class="chart" viewBox="0 0 600 200" role="img" aria-label="Challenges over time"></svg>
+    </div>
+    <div class="card">
+      <h2>Page views</h2>
+      <p class="legend"><span><i class="human"></i>people</span><span><i class="bots"></i>bots</span><span><i class="unk"></i>unclassified</span></p>
+      <svg id="pv-chart" class="chart" viewBox="0 0 600 200" role="img" aria-label="Page views over time"></svg>
+    </div>
+  </div>
+  <div class="card">
+    <h2>Who visits</h2>
+    <div id="kinds" class="kinds"></div>
+  </div>
+  <div class="card">
+    <h2>Pages</h2>
+    <div class="scroll"><table id="pages" class="data">
+      <thead><tr><th>Path</th><th>Views</th><th>402</th><th>Unlocked</th><th>Rate</th><th>Sats</th><th>Time to unlock</th><th>Time on page</th><th>Response</th><th>Visitors</th></tr></thead>
+      <tbody></tbody>
+    </table></div>
+  </div>
+  <div class="card">
+    <h2>Clients</h2>
+    <div class="toolbar">
+      <select id="cl-kind" aria-label="Kind of client">
+        <option value="">All kinds</option><option value="human">People</option><option value="verified-bot">Verified bots</option>
+        <option value="bot">Bots and scripts</option><option value="impostor">Impostors</option><option value="unknown">Unclassified</option>
+      </select>
+      <input id="cl-search" type="search" placeholder="Search visitor, agent, path" aria-label="Search clients">
+      <span id="cl-count" class="note"></span>
+    </div>
+    <div class="scroll"><table id="clients" class="data">
+      <thead><tr><th>Visitor</th><th>Kind</th><th>Agent</th><th>Requests</th><th>Pages</th><th>402</th><th>Unlocked</th><th>Sats</th><th>Time to unlock</th><th>Last page</th><th>Last seen</th></tr></thead>
+      <tbody></tbody>
+    </table></div>
+    <p class="note">Kinds: a verified bot is a known crawler whose address or signature checks out; an impostor claims to be one and fails the check; a bot says so in its User-Agent (or sends none); a person is a browser sending a language and HTML requests or the session cookie. Visitors are shown as <code>admin.visitor_ips</code> says.</p>
+  </div>
 </section>
 
 <section id="settings" class="page narrow" hidden>

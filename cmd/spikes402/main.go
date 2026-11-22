@@ -13,12 +13,14 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/Choffolo/spikes402/client"
 	"github.com/Choffolo/spikes402/internal/admin"
 	"github.com/Choffolo/spikes402/internal/botid"
+	"github.com/Choffolo/spikes402/internal/btc"
 	"github.com/Choffolo/spikes402/internal/config"
 	"github.com/Choffolo/spikes402/internal/gate"
 	"github.com/Choffolo/spikes402/internal/lightning"
@@ -117,6 +119,8 @@ func main() {
 	if cfg.AdminEnabled() {
 		monitor = admin.NewMonitor(cfg.Admin.VisitorIPs, time.Now())
 		observer = monitor.Observe
+		legacyStats := admin.StatsPath(*configFile)
+		monitor.PersistStats(filepath.Join(cfg.StateDir, filepath.Base(legacyStats)), legacyStats, log.Printf)
 	}
 
 	g := gate.New(gate.Options{
@@ -143,6 +147,7 @@ func main() {
 		Surge:              cfg.Surge,
 		Observer:           observer,
 		Argon2MaxMemoryMiB: cfg.Argon2MaxMemoryMiB,
+		Lottery:            startLottery(cfg),
 
 		SpentStore:   spentStore,
 		SpentRecords: spentRecords,
@@ -195,6 +200,20 @@ func main() {
 // maxHeaderBytes bounds the request line plus headers (Go's default is
 // 1 MiB). URIs beyond gate.MaxURIBytes are refused anyway.
 const maxHeaderBytes = 32 << 10
+
+// startLottery connects to the solo pool when "lottery" is set, so that
+// proofs of work are Bitcoin lottery tickets. It returns nil otherwise (a
+// typed nil would not compare equal to nil inside the gate).
+func startLottery(cfg *config.Config) gate.Lottery {
+	if !cfg.Lottery.On() {
+		return nil
+	}
+	l := btc.New(btc.Options{Pool: cfg.Lottery.Pool, User: cfg.Lottery.User(), Password: cfg.Lottery.Password,
+		Agent: "spikes402", JobTTL: cfg.ChallengeTTL(), Logf: log.Printf})
+	go l.Run(context.Background())
+	log.Printf("lottery: solo mining through %s for %s; until a job arrives, proofs of work are ordinary sha256d", cfg.Lottery.Pool, cfg.Lottery.Address)
+	return l
+}
 
 // startAdmin serves the admin API and dashboard on their own address
 // (localhost by default), separate from the public proxy.

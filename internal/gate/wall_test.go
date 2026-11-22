@@ -1,6 +1,7 @@
 package gate
 
 import (
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -214,6 +215,68 @@ console.log(JSON.stringify(out))`
 			}
 		} else if rec.Code != http.StatusPaymentRequired { // same token: already spent
 			t.Fatalf("a token must be spendable once, got %d", rec.Code)
+		}
+	}
+}
+
+// The worker's Bitcoin lottery mode finds the same first nonce as
+// pow.HeaderHash, within its range, and reports a range with no solution.
+func TestBrowserWorkerLotteryHeader(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node not installed")
+	}
+	header := make([]byte, 76)
+	for i := range header {
+		header[i] = byte(i*7 + 3)
+	}
+	const bits = 12
+	first := func(from uint32) uint32 {
+		for n := from; ; n++ {
+			if pow.HashZeroBits(pow.HeaderHash(header, n)) >= bits {
+				return n
+			}
+		}
+	}
+	worker := t.TempDir() + "/worker.js"
+	if err := os.WriteFile(worker, []byte(powWorkerJS), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	const run = `const vm=require("vm"),fs=require("fs");let out;const self={postMessage:m=>{out=m}};
+vm.runInNewContext(fs.readFileSync(process.argv[1],"utf8"),{self,TextEncoder,Date,Int32Array,Uint8Array,String,parseInt});
+self.onmessage({data:{header:process.argv[2],difficulty:+process.argv[3],start:+process.argv[4],end:+process.argv[5]}});
+console.log(JSON.stringify(out))`
+	want := first(0)
+	second := first(want + 1)
+	for _, c := range []struct {
+		start, end uint32
+		nonce      uint32
+		exhausted  bool
+	}{
+		{0, 4294967295, want, false},
+		{want + 1, 4294967295, second, false},
+		{want + 1, second - 1, 0, true},
+	} {
+		raw, err := exec.Command(node, "-e", run, worker, hex.EncodeToString(header), strconv.Itoa(bits),
+			strconv.FormatUint(uint64(c.start), 10), strconv.FormatUint(uint64(c.end), 10)).Output()
+		if err != nil {
+			t.Fatal(err)
+		}
+		var res struct {
+			Nonce     *uint32
+			Exhausted bool
+		}
+		if err := json.Unmarshal(raw, &res); err != nil {
+			t.Fatalf("%s: %v", raw, err)
+		}
+		if c.exhausted {
+			if !res.Exhausted || res.Nonce != nil {
+				t.Fatalf("range %d-%d: got %s, want exhausted", c.start, c.end, raw)
+			}
+			continue
+		}
+		if res.Nonce == nil || *res.Nonce != c.nonce {
+			t.Fatalf("range %d-%d: got %s, want nonce %d", c.start, c.end, raw, c.nonce)
 		}
 	}
 }

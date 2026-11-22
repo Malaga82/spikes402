@@ -31,7 +31,8 @@ type Bot struct {
 // DefaultBots are checked with the IP range lists their operators
 // publish, and reverse DNS where the operator documents it.
 var DefaultBots = []Bot{
-	{"Googlebot", "Googlebot", "https://developers.google.com/static/search/apis/ipranges/googlebot.json", []string{"googlebot.com", "google.com"}},
+	{"Googlebot", "Googlebot", "https://developers.google.com/crawling/ipranges/common-crawlers.json", []string{"googlebot.com"}},
+	{"AdsBot-Google", "AdsBot-Google", "https://developers.google.com/crawling/ipranges/special-crawlers.json", nil},
 	{"Bingbot", "bingbot", "https://www.bing.com/toolbox/bingbot.json", []string{"search.msn.com"}},
 	{"GPTBot", "GPTBot", "https://openai.com/gptbot.json", nil},
 	{"OAI-SearchBot", "OAI-SearchBot", "https://openai.com/searchbot.json", nil},
@@ -209,7 +210,10 @@ func (c *Classifier) check(b Bot, ip net.IP) (Kind, string, string) {
 				return Verified, "ip-list", ""
 			}
 		}
-		return Impostor, "ip-list", ""
+		// Try the operator's documented reverse-DNS check after a list miss.
+		if len(b.ReverseDNS) == 0 {
+			return Impostor, "ip-list", ""
+		}
 	}
 	if len(b.ReverseDNS) > 0 {
 		ok, err := c.reverseDNS(b, addr)

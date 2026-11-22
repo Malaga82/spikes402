@@ -58,11 +58,11 @@ func (s *Intents) Load() (*Intent, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	raw, err := os.ReadFile(filepath.Join(s.dir, intentName))
-	if errors.Is(err, os.ErrNotExist) || len(raw) == 0 {
+	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("withdraw intent: %w", err)
+		return nil, fmt.Errorf("withdraw intent: %w: %w", ErrCorrupt, err)
 	}
 	payload, err := Unseal(s.key, string(raw))
 	if err != nil {

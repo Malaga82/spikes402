@@ -244,6 +244,9 @@ func (g *Gate) serveClaim(w http.ResponseWriter, r *http.Request) {
 			g.writeClaim(w, r, http.StatusConflict, claimBody{Status: "spent"})
 			return
 		}
+		if g.opt.Observer != nil { // the statistics count the paid price
+			r = r.WithContext(context.WithValue(r.Context(), infoKey{}, &reqInfo{token: c.ID, price: c.PriceSats}))
+		}
 		g.observe(r, g.classify(r), OutcomePaid)
 		g.pending.drop(c.ID)
 		g.issuePassFor(w, r, c.ID, c.Resource)

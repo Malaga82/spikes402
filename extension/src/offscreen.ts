@@ -12,7 +12,7 @@ type WalletMsg =
   | { target: "wallet"; type: "disconnect" }
   | { target: "wallet"; type: "getInfo" }
   | { target: "wallet"; type: "receive"; amountSats: number }
-  | { target: "wallet"; type: "send"; destination: string; amountSats?: number; maxFeeSats?: number }
+  | { target: "wallet"; type: "send"; destination: string; amountSats?: number; maxFeeSats?: number; reservationId?: string }
   | { target: "wallet"; type: "lookupSend"; requestId: string; invoice: string }
   | { target: "wallet"; type: "status" };
 
@@ -80,7 +80,12 @@ async function handle(msg: WalletMsg): Promise<unknown> {
     case "send":
       if (!unlocked) throw new WalletError("The wallet is locked.");
       bumpAutoLock();
-      return sparkBackend.send(msg.destination, msg.amountSats, { maxFeeSats: msg.maxFeeSats });
+      return sparkBackend.send(msg.destination, msg.amountSats, {
+        maxFeeSats: msg.maxFeeSats,
+        onRequest: msg.reservationId ? async (requestId) => {
+          await chrome.runtime.sendMessage({ type: "walletRequestId", id: msg.reservationId, requestId });
+        } : undefined,
+      });
     case "lookupSend":
       if (!unlocked) throw new WalletError("The wallet is locked.");
       return sparkBackend.lookupSend(msg.requestId, msg.invoice);

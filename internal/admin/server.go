@@ -108,6 +108,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/whoami", s.api(false, s.whoami))
 	mux.HandleFunc("GET /api/status", s.api(false, s.status))
 	mux.HandleFunc("GET /api/siege", s.api(false, s.siege))
+	mux.HandleFunc("GET /api/stats", s.api(false, s.stats))
 	mux.HandleFunc("GET /api/settings", s.api(false, s.getSettings))
 	mux.HandleFunc("PUT /api/settings", s.api(false, s.putSettings))
 	mux.HandleFunc("GET /api/proposals", s.api(false, s.listProposals))
@@ -274,6 +275,13 @@ func (s *Server) status(_ http.ResponseWriter, _ *http.Request, role Role) (any,
 		Counts: s.mon.Counts(), Gate: s.gate.Status(), Node: info, NodeError: nodeErr,
 		Settings: s.config().Public(), PendingChanges: s.proposals.pending(s.now()),
 	}, nil
+}
+
+func (s *Server) stats(_ http.ResponseWriter, r *http.Request, _ Role) (any, error) {
+	return struct {
+		Report
+		Lottery any `json:"lottery,omitempty"` // the Bitcoin lottery's counters, if it is on
+	}{s.mon.Stats(r.URL.Query().Get("range"), r.URL.Query().Get("kind"), s.now()), s.gate.Status().Lottery}, nil
 }
 
 // nodeStatus asks the node at most every 10 seconds, with a short timeout.
