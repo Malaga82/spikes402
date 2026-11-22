@@ -307,3 +307,37 @@ func TestLotteryNoPool(t *testing.T) {
 		t.Fatalf("%+v", s)
 	}
 }
+
+// A set_difficulty from the pool while proofs are being recorded must not
+// race with the read of the job's pool difficulty (go test -race).
+func TestRecordAndSetDifficultyDoNotRace(t *testing.T) {
+	l := New(Options{JobTTL: time.Minute})
+	l.en1, l.en2Size, l.conn = []byte{42}, 4, true
+	params, _, _ := vecNotify(t)
+	var jobs []*job
+	for i := 0; i < 200; i++ {
+		j, _, err := parseNotify(params)
+		if err != nil {
+			t.Fatal(err)
+		}
+		l.addJob(j, false, l.gen) // no difficulty yet: poolDiff is 0
+		jobs = append(jobs, j)
+	}
+	var high [32]byte
+	for i := range high {
+		high[i] = 0xff // not a block, so the pool difficulty is read
+	}
+	var wg sync.WaitGroup
+	wg.Add(len(jobs) + 1)
+	for _, j := range jobs { // each proof on its own request goroutine, as in the gate
+		go func() {
+			defer wg.Done()
+			l.record(j, 1, 1, 1, high)
+		}()
+	}
+	go func() {
+		defer wg.Done()
+		l.notification(rpcMsg{Method: "mining.set_difficulty", Params: []byte("[1e30]")}, l.gen)
+	}()
+	wg.Wait()
+}

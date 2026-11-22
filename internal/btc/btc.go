@@ -112,7 +112,6 @@ type Lottery struct {
 	lastErr   string
 	lastErrAt time.Time
 
-	en2     atomic.Uint64
 	submits chan share
 	stats   struct {
 		offers, valid, invalid, submitted, accepted, rejected, dropped, blocks atomic.Uint64
@@ -241,13 +240,14 @@ func (l *Lottery) record(jb *job, en2 uint64, nonce uint32, bits int, h [32]byte
 	l.hashes += math.Ldexp(1, bits)
 	l.best = max(l.best, d)
 	current := l.currentLocked(jb)
+	poolDiff := jb.poolDiff // set_difficulty may fill it in, under l.mu
 	l.mu.Unlock()
 	block := v.Cmp(compactTarget(jb.nbits)) <= 0
 	if block {
 		l.stats.blocks.Add(1)
 		l.opt.Logf("btc: BLOCK! job %s nonce %d clears the network target", jb.poolID, nonce)
 	}
-	if block || (jb.poolDiff > 0 && d >= jb.poolDiff) {
+	if block || (poolDiff > 0 && d >= poolDiff) {
 		if !current {
 			l.stats.dropped.Add(1)
 			return

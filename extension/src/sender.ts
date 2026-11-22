@@ -17,7 +17,7 @@ export function isExtensionPage(sender: { url?: string; tab?: { id?: number } | 
 export function pageOrigin(sender: { origin?: string; url?: string; tab?: { url?: string } }): string | undefined {
   // A sandboxed document has an opaque origin: it is not the site in the tab's URL.
   if (sender.origin === "null") return undefined;
-  if (sender.origin && sender.origin !== "null" && /^https?:\/\//.test(sender.origin)) {
+  if (sender.origin && /^https?:\/\//.test(sender.origin)) {
     return sender.origin;
   }
   const raw = sender.tab?.url ?? sender.url;

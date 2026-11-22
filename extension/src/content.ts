@@ -13,7 +13,8 @@ const METHODS = new Set(["enable", "getInfo", "sendPayment"]);
 
 window.addEventListener("message", (ev: MessageEvent) => {
   const d = ev.data;
-  if (ev.source !== window || ev.origin !== location.origin) return;
+  // A sandboxed document (opaque origin "null") is not the site it is served from.
+  if (ev.source !== window || ev.origin !== location.origin || location.origin === "null") return;
   if (!d || d.source !== SOURCE || typeof d.id !== "number") return;
   if (typeof d.method !== "string" || !METHODS.has(d.method)) return;
   const origin = location.origin;
