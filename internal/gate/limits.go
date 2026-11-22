@@ -78,7 +78,8 @@ type offer struct {
 	expires time.Time
 	price   int64
 	pow     pow.Params
-	qr      string // data URI, filled once when the invoice is created
+	qr      string        // data URI, filled once when the invoice is created
+	lottery *lotteryOffer // the Bitcoin lottery challenge of the same offer, if any
 }
 
 // pendingOffers remembers the invoices handed out and not yet expired,

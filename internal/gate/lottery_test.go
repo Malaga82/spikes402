@@ -60,6 +60,12 @@ func (f *fakeLottery) Check(job uint32, en2 uint64, nonce uint32, bits int) (fun
 
 func (f *fakeLottery) Status() any { return "playing" }
 
+func (f *fakeLottery) Has(job uint32) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return job == 7 && !f.gone
+}
+
 func newLotteryFixture(t *testing.T) (*fixture, *fakeLottery) {
 	f := newFixture(t)
 	l := &fakeLottery{}
@@ -184,5 +190,39 @@ func TestLotteryOff(t *testing.T) {
 	}
 	if st := f.gate.Status(); st.Lottery != "playing" {
 		t.Fatalf("status %+v", st)
+	}
+}
+
+// The lottery challenge belongs to the offer: a reload of the 402 gets the
+// same one (no new header, no new token), solving it spends the offer
+// (the ordinary puzzle of the same 402 is then a replay) and drops the
+// cached invoice, and a new block replaces a stale header.
+func TestLotteryChallengeBelongsToTheOffer(t *testing.T) {
+	f, l := newLotteryFixture(t)
+	const client = "203.0.113.1:1"
+	b1, sess := f.offerFor(t, client, "/premium/a", "")
+	b2, _ := f.offerFor(t, client, "/premium/a", sess)
+	if b1.Lottery == nil || b2.Lottery == nil || b1.Lottery.Challenge != b2.Lottery.Challenge || l.en2 != 1 {
+		t.Fatalf("reload: lottery %v / %v, %d headers handed out", b1.Lottery, b2.Lottery, l.en2)
+	}
+	l.mu.Lock()
+	l.gone = true // a new block
+	l.mu.Unlock()
+	b3, _ := f.offerFor(t, client, "/premium/a", sess)
+	if b3.L402 == nil || b3.L402.Token != b1.L402.Token || b3.Lottery == nil || b3.Lottery.Challenge == b1.Lottery.Challenge {
+		t.Fatal("a stale header must be replaced in the same offer")
+	}
+	l.mu.Lock()
+	l.gone = false
+	l.mu.Unlock()
+	if rec := f.get("/premium/a", solveLottery(t, b3.Lottery), ""); rec.Code != http.StatusOK {
+		t.Fatalf("lottery answer: %d", rec.Code)
+	}
+	n, _ := f.pow.Solve(context.Background(), b1.PoW.Challenge)
+	if rec := f.get("/premium/a", "PoW "+b1.PoW.Challenge+":"+strconv.FormatUint(n, 10), ""); rec.Code != http.StatusPaymentRequired {
+		t.Fatalf("ordinary puzzle of an offer already solved by the lottery: got %d, want 402", rec.Code)
+	}
+	if b4, _ := f.offerFor(t, client, "/premium/a", sess); b4.L402 == nil || b4.L402.Token == b1.L402.Token {
+		t.Fatal("the solved offer is still handed out")
 	}
 }

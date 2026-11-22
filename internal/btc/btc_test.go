@@ -90,6 +90,14 @@ func TestNotifyErrors(t *testing.T) {
 		func(p []any) { p[4] = []any{"zz"} },
 		func(p []any) { p[5] = "123" },
 		func(p []any) { p[0] = "" },
+		func(p []any) { // more merkle levels than any block needs
+			branch := make([]any, maxBranch+1)
+			for i := range branch {
+				branch[i] = strings.Repeat("00", 32)
+			}
+			p[4] = branch
+		},
+		func(p []any) { p[2] = strings.Repeat("00", maxCoinbase) }, // an oversized coinbase
 	} {
 		p := append([]any(nil), params...)
 		f(p)
@@ -340,4 +348,18 @@ func TestRecordAndSetDifficultyDoNotRace(t *testing.T) {
 		l.notification(rpcMsg{Method: "mining.set_difficulty", Params: []byte("[1e30]")}, l.gen)
 	}()
 	wg.Wait()
+}
+
+// A difficulty no real pool uses is ignored: every proof would become a share.
+func TestAbsurdPoolDifficultyIgnored(t *testing.T) {
+	l := New(Options{})
+	l.notification(rpcMsg{Method: "mining.set_difficulty", Params: []byte("[1e-12]")}, l.gen)
+	l.notification(rpcMsg{Method: "mining.set_difficulty", Params: []byte("[-1]")}, l.gen)
+	if l.diff != 0 {
+		t.Fatalf("pool difficulty %v accepted", l.diff)
+	}
+	l.notification(rpcMsg{Method: "mining.set_difficulty", Params: []byte("[0.001]")}, l.gen)
+	if l.diff != 0.001 {
+		t.Fatalf("pool difficulty %v, want 0.001", l.diff)
+	}
 }

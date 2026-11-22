@@ -26,6 +26,7 @@ const (
 	minBackoff    = time.Second
 	maxBackoff    = time.Minute
 	writeDeadline = 10 * time.Second
+	minPoolDiff   = 1e-9 // below this every proof would be a share: a broken or hostile pool
 )
 
 type dialer func(ctx context.Context, addr string) (net.Conn, error)
@@ -261,7 +262,7 @@ func (l *Lottery) notification(m rpcMsg, gen uint64) {
 	switch m.Method {
 	case "mining.set_difficulty":
 		if len(p) > 0 {
-			if d, ok := p[0].(float64); ok && d > 0 {
+			if d, ok := p[0].(float64); ok && d >= minPoolDiff {
 				l.mu.Lock()
 				l.diff = d
 				for _, j := range l.jobs { // jobs that came before any difficulty would never send a share

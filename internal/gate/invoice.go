@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -244,10 +245,16 @@ func (g *Gate) serveClaim(w http.ResponseWriter, r *http.Request) {
 			g.writeClaim(w, r, http.StatusConflict, claimBody{Status: "spent"})
 			return
 		}
-		if g.opt.Observer != nil { // the statistics count the paid price
-			r = r.WithContext(context.WithValue(r.Context(), infoKey{}, &reqInfo{token: c.ID, price: c.PriceSats}))
+		if g.opt.Observer != nil { // the statistics count the paid price, on the paid page
+			obs := r.WithContext(context.WithValue(r.Context(), infoKey{}, &reqInfo{token: c.ID, price: c.PriceSats}))
+			// The token only has the page's hash; the 402 page's fetch names the
+			// page in its Referer. Believed only when it hashes to the token's page.
+			if ref, err := url.Parse(r.Referer()); err == nil && ref.Path != "" &&
+				hashResource(http.MethodGet+" "+ref.RequestURI()) == c.Resource {
+				obs.Method, obs.URL = http.MethodGet, &url.URL{Path: ref.Path, RawPath: ref.RawPath, RawQuery: ref.RawQuery}
+			}
+			g.observe(obs, g.classify(r), OutcomePaid)
 		}
-		g.observe(r, g.classify(r), OutcomePaid)
 		g.pending.drop(c.ID)
 		g.issuePassFor(w, r, c.ID, c.Resource)
 		return

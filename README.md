@@ -473,6 +473,11 @@ your address. Nothing else changes for the site.
   name, e.g. solo.ckpool.org or public-pool.io (they take a small fee on a
   block). The header assembly is tested against a real mainnet block, and
   the job parsing against live jobs of both pools.
+- **Prefer `tls://` when the pool offers it.** Stratum v1 is plain text:
+  anyone on the path can rewrite the `mining.authorize` that carries your
+  payout address, or feed fake jobs (then only the lottery suffers; the
+  gate falls back to the ordinary puzzle). Spikes402 caps what a pool may
+  send (32 merkle levels, an 8 KiB coinbase, no absurd share difficulty).
 
 ## Bot identification
 

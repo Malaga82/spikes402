@@ -268,6 +268,7 @@ func (s *Stats) add(e gate.Event, visitor string) {
 	}
 	kind := kindOf(e)
 	path := cleanPath(e.Resource)
+	ck := visitor + "|" + uaKey(e.UserAgent) // client key: hashed before taking the lock
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -275,7 +276,7 @@ func (s *Stats) add(e gate.Event, visitor string) {
 	b := s.bucket(now)
 	b.Requests++
 
-	c := s.client(visitor+"|"+uaKey(e.UserAgent), visitor, e, now)
+	c := s.client(ck, visitor, e, now)
 	if kindRank[kind] > kindRank[c.Kind] {
 		c.Kind = kind
 	}
@@ -313,7 +314,7 @@ func (s *Stats) add(e gate.Event, visitor string) {
 			b.BotViews++
 		}
 		if c.Kind == KindHuman { // a crawler's pace says nothing about reading time
-			s.visit(e, visitor, path, now)
+			s.visit(e, ck, path, now)
 		}
 	}
 	if e.Status > 0 {
@@ -338,7 +339,7 @@ func (s *Stats) add(e gate.Event, visitor string) {
 		}
 		// Timed per client and page, not per token: a 402 can offer several
 		// tokens (invoice, puzzle, lottery, the browser's), and any of them may come back.
-		if k := waitKey(e, visitor, path); s.tokens[k].IsZero() {
+		if k := waitKey(ck, path); s.tokens[k].IsZero() {
 			s.rememberToken(k, now)
 		}
 	case gate.OutcomePaid:
@@ -348,12 +349,12 @@ func (s *Stats) add(e gate.Event, visitor string) {
 		p.Sats += e.Price
 		c.Paid++
 		c.Sats += e.Price
-		s.unlocked(waitKey(e, visitor, path), now, b, p, c)
+		s.unlocked(waitKey(ck, path), now, b, p, c)
 	case gate.OutcomePoW:
 		b.PoW++
 		p.PoW++
 		c.PoW++
-		s.unlocked(waitKey(e, visitor, path), now, b, p, c)
+		s.unlocked(waitKey(ck, path), now, b, p, c)
 	case gate.OutcomeFree:
 		b.Free++
 		p.Free++
@@ -366,8 +367,8 @@ func (s *Stats) add(e gate.Event, visitor string) {
 
 // waitKey identifies one client waiting at one page (not by session: a
 // client gets its session cookie with the 402 itself).
-func waitKey(e gate.Event, visitor, path string) string {
-	return visitor + "|" + uaKey(e.UserAgent) + "|" + path
+func waitKey(clientKey, path string) string {
+	return clientKey + "|" + path
 }
 
 // unlocked times how long the client took from its 402 to a valid proof.
@@ -406,10 +407,10 @@ func (s *Stats) rememberToken(token string, now time.Time) {
 
 // visit estimates time on page: the gap to the same visitor's next page,
 // within one visit (sessionGap). The last page of a visit has no estimate.
-func (s *Stats) visit(e gate.Event, visitor, path string, now time.Time) {
+func (s *Stats) visit(e gate.Event, clientKey, path string, now time.Time) {
 	key := e.Session
 	if key == "" {
-		key = visitor + "|" + uaKey(e.UserAgent)
+		key = clientKey
 	}
 	if prev, ok := s.sessions[key]; ok {
 		if d := now.Sub(prev.at); d > 0 && d <= sessionGap {

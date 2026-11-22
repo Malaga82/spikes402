@@ -361,6 +361,13 @@ func (l *Lottery) setErr(msg string) {
 
 // parseNotify reads mining.notify: job_id, prevhash, coinb1, coinb2,
 // merkle_branch, version, nbits, ntime, clean_jobs.
+// Limits on what a pool may send: a block has at most a few thousand
+// transactions (a branch of 12–13 levels), and a coinbase is small.
+const (
+	maxBranch   = 32
+	maxCoinbase = 8 << 10
+)
+
 func parseNotify(p []any) (*job, bool, error) {
 	if len(p) < 9 {
 		return nil, false, errors.New("mining.notify: too few fields")
@@ -376,7 +383,7 @@ func parseNotify(p []any) (*job, bool, error) {
 	prev, err1 := hex.DecodeString(str(1))
 	cb1, err2 := hex.DecodeString(str(2))
 	cb2, err3 := hex.DecodeString(str(3))
-	if err := errors.Join(err1, err2, err3); err != nil || len(prev) != 32 || str(0) == "" {
+	if err := errors.Join(err1, err2, err3); err != nil || len(prev) != 32 || str(0) == "" || len(cb1)+len(cb2) > maxCoinbase {
 		return nil, false, errors.New("mining.notify: malformed job")
 	}
 	// The pool sends prevhash as eight 4-byte words, each byte-swapped.
@@ -385,7 +392,7 @@ func parseNotify(p []any) (*job, bool, error) {
 	}
 	j := &job{poolID: str(0), prevHash: prev, coinb1: cb1, coinb2: cb2, height: coinbaseHeight(cb1)}
 	list, ok := p[4].([]any)
-	if !ok {
+	if !ok || len(list) > maxBranch {
 		return nil, false, errors.New("mining.notify: malformed merkle branch")
 	}
 	for _, x := range list {

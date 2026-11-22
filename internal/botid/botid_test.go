@@ -10,8 +10,10 @@ import (
 	"net/http/httptest"
 	"net/netip"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/Choffolo/spikes402/webbotauth"
 )
@@ -22,11 +24,15 @@ type fakeDNS struct {
 	a     map[string][]string
 	aErr  map[string]error // forward lookup errors by name
 	fail  bool
+	gate  chan struct{} // if set, PTR lookups wait for it
 	calls atomic.Int64
 }
 
 func (f *fakeDNS) LookupAddr(_ context.Context, addr string) ([]string, error) {
 	f.calls.Add(1)
+	if f.gate != nil {
+		<-f.gate
+	}
 	if f.fail {
 		return nil, errors.New("timeout")
 	}
@@ -279,5 +285,48 @@ func TestForwardDNSNotFoundAndBreak(t *testing.T) {
 		if got := c.Classify(req(googleUA), net.ParseIP(ip), "https"); got.Kind != want {
 			t.Errorf("%s: got %v, want %s", ip, got, want)
 		}
+	}
+}
+
+// A failing DNS is asked once a minute per address, not on every request,
+// and requests that arrive together share one lookup.
+func TestReverseDNSFailureCacheAndSharedLookup(t *testing.T) {
+	c := New(bots, nil)
+	now := time.Unix(1_800_000_000, 0)
+	c.now = func() time.Time { return now }
+	dns := &fakeDNS{fail: true}
+	c.resolver = dns
+	for i := 0; i < 5; i++ {
+		if got := c.Classify(req(googleUA), net.ParseIP("7.7.7.7"), "https"); got.Kind != Unknown {
+			t.Fatalf("got %v", got)
+		}
+	}
+	if n := dns.calls.Load(); n != 1 {
+		t.Fatalf("%d PTR lookups for one failing address, want 1", n)
+	}
+	now = now.Add(dnsErrorTTL + time.Second)
+	c.Classify(req(googleUA), net.ParseIP("7.7.7.7"), "https")
+	if n := dns.calls.Load(); n != 2 {
+		t.Fatalf("%d PTR lookups after the failure expired, want 2", n)
+	}
+
+	dns2 := &fakeDNS{gate: make(chan struct{})}
+	c.resolver = dns2
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			c.Classify(req(googleUA), net.ParseIP("8.8.4.4"), "https")
+		}()
+	}
+	for dns2.calls.Load() == 0 {
+		time.Sleep(time.Millisecond)
+	}
+	time.Sleep(20 * time.Millisecond) // let the others queue behind the first lookup
+	close(dns2.gate)
+	wg.Wait()
+	if n := dns2.calls.Load(); n != 1 {
+		t.Fatalf("%d PTR lookups for 8 concurrent requests, want 1", n)
 	}
 }

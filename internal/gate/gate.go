@@ -634,7 +634,10 @@ func (g *Gate) challenge(w http.ResponseWriter, r *http.Request, set *Settings, 
 	} else {
 		g.observe(r, class, OutcomeChallenged)
 	}
-	g.writeChallenge(w, r, o, problem, g.newLotteryOffer(r, now, o.pow, price))
+	if o.lottery != nil && !g.opt.Lottery.Has(o.lottery.job) {
+		o.lottery = g.newLotteryOffer(r, o) // a new block made the cached header stale
+	}
+	g.writeChallenge(w, r, o, problem, o.lottery)
 }
 
 // newOffer creates a token and, if there is room, an invoice.
@@ -679,6 +682,7 @@ func (g *Gate) newOffer(r *http.Request, now time.Time, key string, p pow.Params
 		return offer{}, err
 	}
 	o := offer{id: c.ID, token: token, invoice: invoice, expires: time.Unix(c.Expires, 0), price: price, pow: p}
+	o.lottery = g.newLotteryOffer(r, o)
 	if invoice != "" {
 		o.qr = string(invoiceQR(invoice))
 		g.pending.put(key, o)
