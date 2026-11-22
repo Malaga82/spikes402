@@ -1,0 +1,38 @@
+# Five-minute Spikes402 quickstart (proof-of-work only, no Lightning).
+# See docs/quickstart.md. Do not commit .env.
+#
+# The proxy uses the host network so it can listen on 127.0.0.1, which the
+# fake Lightning backend requires. Do not publish 8402 on a public address.
+# Do not set bot_policies to "pay" until you have switched to your own phoenixd.
+
+services:
+  origin:
+    image: caddy@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d # caddy 2.10-alpine
+    restart: unless-stopped
+    command: ["caddy", "run", "--config", "/etc/caddy/Caddyfile"]
+    volumes:
+      - ./origin.Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./site:/srv:ro
+    ports:
+      - "127.0.0.1:8080:80"
+    read_only: true
+    tmpfs: ["/tmp", "/data", "/config"]
+
+  spikes402:
+    image: ghcr.io/choffolo/spikes402:v0.2.0
+    restart: unless-stopped
+    network_mode: host
+    depends_on: [origin]
+    env_file: .env
+    environment:
+      SPIKES402_SECRET_KEY: ${SPIKES402_SECRET_KEY:?set a 32+ character secret (openssl rand -hex 32)}
+    volumes:
+      - ./config.json:/etc/spikes402/config.json:ro
+      - spikes402-state:/var/lib/spikes402
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    mem_limit: 512m
+
+volumes:
+  spikes402-state:

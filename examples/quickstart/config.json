@@ -1,0 +1,27 @@
+{
+  "listen": "127.0.0.1:8402",
+  "origin": "http://127.0.0.1:8080",
+  "state_dir": "/var/lib/spikes402",
+  "price_sats": 1,
+  "protect": ["/premium/**"],
+  "pow_seconds_per_sat": 10,
+  "pow_algorithm": "sha256d",
+  "challenges_per_minute": 30,
+  "max_invoices_per_minute": 300,
+  "max_pending_invoices": 10000,
+  "withdraw": {
+    "enabled": false
+  },
+  "lightning": {
+    "backend": "fake"
+  },
+  "bot_policies": {
+    "unknown": {"action": "pow-only"},
+    "impostor": {"action": "pow-only"},
+    "verified": {"action": "pow-only"},
+    "verified-signed": {"action": "pow-only"}
+  },
+  "admin": {
+    "listen": "127.0.0.1:8404"
+  }
+}

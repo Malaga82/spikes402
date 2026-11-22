@@ -1,0 +1,7 @@
+# Optional: TLS terminator on the same Linux host as the proxy.
+# Replace example.com, then run Caddy on the host (not in this Compose file).
+# After this is in front, set client_ip_header and trusted_proxies in config.json
+# (see docs/quickstart.md).
+example.com {
+	reverse_proxy 127.0.0.1:8402
+}

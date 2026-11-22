@@ -1,6 +1,7 @@
 # Deploying Spikes402
 
 A short guide for running the proxy in Docker, with TLS in front of it.
+For a first install on a Linux VPS, start with the [five-minute quickstart](quickstart.md).
 For flags and every config key, see the [README](../README.md).
 
 ## Docker and Compose
