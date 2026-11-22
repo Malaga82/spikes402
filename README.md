@@ -120,6 +120,7 @@ A JSON file (see [`config.example.json`](config.example.json)):
 | `pow_seconds_per_sat` | How much work replaces one sat: seconds of one CPU core (see [Proof-of-work pricing](#proof-of-work-pricing)). Values below 1 are refused unless `unsafe_allow_dangerous_config` is set | `10` |
 | `pow_difficulty` | Leading zero bits for the puzzle. `0` = derive from the price and `pow_seconds_per_sat` | `0` |
 | `pow_algorithm` | `"sha256d"` or `"argon2id"` (memory-hard, see [Argon2id](#argon2id-memory-hard-proof-of-work)) | `"sha256d"` |
+| `browser_pow.mode` | How the [402 page](#the-402-page-for-people) offers the proof-of-work to people: `"button"` (invoice first, "No sats? Do the challenge instead"), `"auto"` (the challenge starts at once) or `"off"` (invoice only) | `"button"` |
 | `lottery.pool` | Solo pool (stratum v1) that turns sha256d work into Bitcoin lottery tickets, `"host:port"` or `"tls://host:port"`. See [Bitcoin lottery](#bitcoin-lottery) | off |
 | `lottery.address` | With `lottery.pool`: the Bitcoin address the pool pays a block to (public, shown on the dashboard) | required with a pool |
 | `lottery.worker` | Optional worker name, sent as `address.worker` | `""` |
@@ -338,27 +339,49 @@ it needs ~256 MiB per verifier and a C library. Not implemented.
 
 ## The 402 page (for people)
 
-A browser (a request that accepts `text/html`) gets a page instead of JSON:
-"This page is protected by an invisible energy wall built with Bitcoin. Pay a
-few sats with the Spikes402 extension, or solve a math puzzle with your
-computer's power." It shows the Lightning invoice (QR code, an **Open in wallet** link for a
-phone or desktop wallet, and a one-click button if a WebLN wallet is present)
-and a **Solve the puzzle** button. After you pay with any wallet the page
-shows "Waiting for payment…", then "Paid — unlocking", and reloads into the
+A browser (a request that accepts `text/html`) gets a page instead of JSON.
+By default it is **Pay or PoW**: the Lightning invoice first, with a
+**No sats? Do the challenge instead** button below it.
+
+<img src="docs/pay-or-pow.png" alt="Pay or PoW: the Lightning invoice and the challenge button" width="420"> <img src="docs/pay-or-pow-lottery.png" alt="One moment: the browser works on a Bitcoin block header" width="420">
+
+**Paying.** The invoice comes as a QR code, an **Open in wallet** link
+(`lightning:`) for a phone or desktop wallet, and a one-click button if a
+WebLN wallet is present. After you pay with any wallet the page shows
+"Waiting for payment…", then "Paid — unlocking", and reloads into the
 content. It learns that the invoice is paid by polling `/.spikes402/claim`
 (see below); the preimage never has to be typed in.
 
-The button runs the same sha256d puzzle as bots do, in Web Workers (one per
-core, at most 8), and shows the work: a progress bar against the expected
-number of attempts, attempts so far, hashes per second, elapsed time. When
-a worker finds the nonce, the page redeems it exactly like a bot would
-(`Authorization: PoW token:nonce`) and reloads into the content. Nothing is
-loaded from outside; the page's Content-Security-Policy allows only hashed
-inline scripts, `connect-src 'self'` (for the claim polls and the redeem
-request) and workers from the proxy itself (`worker-src 'self'`). The
-worker and the claim endpoint live under `/.spikes402/`; that prefix is
-reserved and never reaches your website. With `argon2id` the button is
-hidden (the browser solver is sha256d only); bots and the extension work as before.
+**The challenge.** The button turns the page into **One moment** (right):
+the browser runs the same sha256d puzzle as bots do, in Web Workers (one
+per core, at most 8), and shows the work: a grid that fills up against the
+expected number of attempts, hashes per second, hashes so far and the best
+hash found, its leading zeros in orange. With the [Bitcoin
+lottery](#bitcoin-lottery) on, the puzzle is a real block header and the
+page says so. The invoice folds into **Pay N sats with Lightning instead**;
+opening it pauses the work, closing it starts again. When a worker finds the
+nonce, the page redeems it exactly like a bot would (`Authorization: PoW
+token:nonce`) and reloads into the content.
+
+Choose how the page offers the challenge with `browser_pow`:
+
+```json
+"browser_pow": { "mode": "button" }
+```
+
+- `"button"` (default): Pay or PoW, as above;
+- `"auto"`: the page opens directly on One moment and starts the work at
+  once; paying is one click away;
+- `"off"`: the invoice only, no challenge for people (bots still get the
+  proof-of-work offer in the headers).
+
+Nothing is loaded from outside; the page's Content-Security-Policy allows
+only hashed inline scripts, `connect-src 'self'` (for the claim polls and
+the redeem request) and workers from the proxy itself (`worker-src 'self'`).
+The worker and the claim endpoint live under `/.spikes402/`; that prefix is
+reserved and never reaches your website. With `argon2id` the challenge is
+not offered (the browser solver is sha256d only); bots and the extension
+work as before.
 
 **Difficulty.** The page uses the same difficulty as everyone. A lower
 "interactive" difficulty would only be safe if the server could tell people
@@ -433,8 +456,13 @@ your address. Nothing else changes for the site.
 - The gate checks an answer with a few SHA-256 runs, like the ordinary
   puzzle. An answer that also clears the pool's share target is sent to the
   pool (`mining.submit`); one that clears the network target is a block.
-- People play too: the [402 page](#the-402-page-for-people) puzzle runs on
-  the lottery header when there is one, and the page says so.
+- People play too: the [402 page](#the-402-page-for-people) challenge runs on
+  the lottery header when there is one ("Bitcoin block header" and the best
+  hash on the page), and falls back to the ordinary puzzle if the pool job
+  has expired.
+- The dashboard's [Stats](#stats) page has a **Bitcoin lottery** panel:
+  hashes played, best hash, chance of a block so far, shares accepted,
+  blocks found, pool, payout address and the block being mined.
 - **The odds:** the network does about 10^21 hashes a second. A visit that
   takes a browser 2 seconds is ~2 million hashes, a chance of about 3·10^-18
   of a block. It is a lottery, honestly labelled, not income; the dashboard
@@ -688,7 +716,8 @@ strings. Use `"admin.visitor_ips": "truncate"` for networks
 
 ![Stats](docs/stats.png)
 
-Traffic over the last 24 hours, 7 or 30 days:
+Traffic over the last 24 hours, 7 or 30 days, with the
+[Bitcoin lottery](#bitcoin-lottery) panel when the lottery is on:
 
 - **numbers**: requests, page views (people and bots), `402` answers, the
   share unlocked after a `402`, sats earned, the average time from `402` to

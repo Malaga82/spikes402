@@ -9,7 +9,7 @@
 //
 // In:  {challenge, difficulty, start}   (start: first nonce to try)
 //      or {header, difficulty, start, end} for the Bitcoin lottery (see solveHeader)
-// Out: {attempts}                       progress, every ~200 ms
+// Out: {attempts, hash}                 progress, every ~200 ms (hash: best so far, hex)
 //      {attempts, nonce}                solved
 //      {attempts, exhausted}            lottery range done without a solution
 (function () {
@@ -47,6 +47,7 @@ function compress(s, w) {
 }
 
 function bswap(x) { return (x >>> 24 | x >>> 8 & 0xff00 | x << 8 & 0xff0000 | x << 24) | 0; }
+function hex8(x) { return ("0000000" + (x >>> 0).toString(16)).slice(-8); }
 
 // Bitcoin lottery: header is a real block header without its nonce (76
 // bytes, hex). Hash header + nonce (4 bytes, little-endian) twice and read
@@ -60,7 +61,7 @@ function solveHeader(m) {
   compress(mid, w);
   for (i = 0; i < 3; i++) tw[i] = b[64 + 4 * i] << 24 | b[65 + 4 * i] << 16 | b[66 + 4 * i] << 8 | b[67 + 4 * i];
   tw[4] = -2147483648; tw[15] = 640;
-  var zw = bits >>> 5, rb = bits & 31, attempts = 0, last = Date.now();
+  var zw = bits >>> 5, rb = bits & 31, attempts = 0, last = Date.now(), lead = 4294967296, hash = "";
   for (;;) {
     tw[3] = bswap(n);
     s.set(mid);
@@ -72,14 +73,18 @@ function solveHeader(m) {
     compress(s2, w);
     attempts++;
     var ok = true;
+    if ((bswap(s2[7]) >>> 0) < lead) { // best hash so far, as Bitcoin shows it
+      lead = bswap(s2[7]) >>> 0; hash = "";
+      for (i = 7; i >= 0; i--) hash += hex8(bswap(s2[i]));
+    }
     for (i = 0; i < zw; i++) if (s2[7 - i] !== 0) { ok = false; break; }
     if (ok && rb && (bswap(s2[7 - zw]) >>> (32 - rb)) !== 0) ok = false;
-    if (ok) { self.postMessage({ attempts: attempts, nonce: n }); return; }
-    if (n === end) { self.postMessage({ attempts: attempts, exhausted: true }); return; }
+    if (ok) { self.postMessage({ attempts: attempts, nonce: n, hash: hash }); return; }
+    if (n === end) { self.postMessage({ attempts: attempts, exhausted: true, hash: hash }); return; }
     n = (n + 1) >>> 0;
     if ((attempts & 16383) === 0) {
       var now = Date.now();
-      if (now - last >= 200) { last = now; self.postMessage({ attempts: attempts }); }
+      if (now - last >= 200) { last = now; self.postMessage({ attempts: attempts, hash: hash }); }
     }
   }
 }
@@ -116,7 +121,7 @@ self.onmessage = function (e) {
   }
   layout();
 
-  var zw = bits >>> 5, rb = bits & 31, attempts = 0, last = Date.now();
+  var zw = bits >>> 5, rb = bits & 31, attempts = 0, last = Date.now(), lead = 4294967296, hash = "";
   for (;;) {
     s.set(mid);
     for (i = 0; i < 16; i++) w[i] = tw[i];
@@ -132,9 +137,13 @@ self.onmessage = function (e) {
     attempts++;
 
     var ok = true;
+    if ((s2[0] >>> 0) < lead) { // best hash so far
+      lead = s2[0] >>> 0; hash = "";
+      for (i = 0; i < 8; i++) hash += hex8(s2[i]);
+    }
     for (i = 0; i < zw; i++) if (s2[i] !== 0) { ok = false; break; }
     if (ok && rb && (s2[zw] >>> (32 - rb)) !== 0) ok = false;
-    if (ok) { self.postMessage({ attempts: attempts, nonce: n }); return; }
+    if (ok) { self.postMessage({ attempts: attempts, nonce: n, hash: hash }); return; }
 
     n++;
     var p = tl + nd - 1;
@@ -146,7 +155,7 @@ self.onmessage = function (e) {
     }
     if ((attempts & 16383) === 0) {
       var now = Date.now();
-      if (now - last >= 200) { last = now; self.postMessage({ attempts: attempts }); }
+      if (now - last >= 200) { last = now; self.postMessage({ attempts: attempts, hash: hash }); }
     }
   }
 };

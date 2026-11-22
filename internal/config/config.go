@@ -97,7 +97,8 @@ type Config struct {
 	Admin    Admin    `json:"admin"`
 	Withdraw Withdraw `json:"withdraw"`
 
-	Lottery Lottery `json:"lottery"` // sha256d work on real Bitcoin block headers (see lottery.go)
+	Lottery    Lottery    `json:"lottery"`     // sha256d work on real Bitcoin block headers (see lottery.go)
+	BrowserPoW BrowserPoW `json:"browser_pow"` // how the 402 page offers its proof-of-work to people
 }
 
 // Admin configures the admin API and dashboard. It is off unless a key is set.
@@ -315,6 +316,13 @@ func (c *Config) complete() error {
 	}
 	if err := c.checkLottery(); err != nil {
 		return err
+	}
+	switch c.BrowserPoW.Mode {
+	case "":
+		c.BrowserPoW.Mode = gate.BrowserPoWButton
+	case gate.BrowserPoWButton, gate.BrowserPoWAuto, gate.BrowserPoWOff:
+	default:
+		return errors.New(`"browser_pow.mode" must be "button", "auto" or "off"`)
 	}
 	if c.Argon2MaxMemoryMiB == 0 {
 		c.Argon2MaxMemoryMiB = gate.DefaultArgonMaxMemoryMiB
@@ -743,4 +751,9 @@ func (c *Config) checkSurge() error {
 		}
 	}
 	return nil
+}
+
+// BrowserPoW configures the proof-of-work on the 402 page.
+type BrowserPoW struct {
+	Mode string `json:"mode"` // "button" (default), "auto" or "off"
 }

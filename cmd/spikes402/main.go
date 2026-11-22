@@ -148,6 +148,7 @@ func main() {
 		Observer:           observer,
 		Argon2MaxMemoryMiB: cfg.Argon2MaxMemoryMiB,
 		Lottery:            startLottery(cfg),
+		BrowserPoW:         cfg.BrowserPoW.Mode,
 
 		SpentStore:   spentStore,
 		SpentRecords: spentRecords,

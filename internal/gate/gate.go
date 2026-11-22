@@ -76,6 +76,10 @@ type Options struct {
 	// Lottery, if set, offers sha256d work on real Bitcoin block headers from a
 	// solo pool, so every proof is also a lottery ticket (see lottery.go).
 	Lottery Lottery
+
+	// BrowserPoW is how the 402 page offers its proof-of-work to people:
+	// BrowserPoWButton (the default, also for ""), BrowserPoWAuto or BrowserPoWOff.
+	BrowserPoW string
 }
 
 // PriceRule maps a path pattern (same syntax as Protect) to a price.
@@ -728,7 +732,7 @@ func (g *Gate) writeChallenge(w http.ResponseWriter, r *http.Request, o offer, p
 		h.Set("Content-Type", "text/html; charset=utf-8")
 		h.Set("Content-Security-Policy", pageCSP)
 		w.WriteHeader(http.StatusPaymentRequired)
-		writeHTML(w, body, template.URL(o.qr))
+		writeHTML(w, body, template.URL(o.qr), g.opt.BrowserPoW)
 		return
 	}
 	h.Set("Content-Type", "application/json")

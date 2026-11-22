@@ -35,16 +35,16 @@ func TestEnergyWallPage(t *testing.T) {
 		t.Fatalf("got %d, want 402", rec.Code)
 	}
 	for _, want := range []string{
-		"invisible energy wall built with Bitcoin",
-		"Pay a few sats with the",
-		"solve a math puzzle with your computer",
+		`<h1 id="pw-title">Pay or PoW</h1>`,
 		`href="https://github.com/Choffolo/spikes402#browser-wallet-extension-prototype"`,
-		`id="pow-go"`, `id="pow-bar"`, `id="pow-stats"`,
+		`<details id="pay" open><summary hidden>Pay 10 sats with Lightning instead</summary>`,
+		`id="pow-go">No sats? Do the challenge instead</button>`, "about 1 s of computing in your browser",
+		`id="pw-run" hidden`, `class="pw-grid"`, `id="pw-zeros"`,
+		`data-mode="button"`,
 		`data-worker="` + workerSrc + `"`,
 		`data-difficulty="8"`,
 		`<div class="paywall">`,
-		`class="ways"`,
-		`width="160"`,
+		`width="256"`,
 		`id="webln-pay"`, // the Lightning invoice flow is still there
 		`id="open-wallet"`, `id="pay-wait"`, "Open in wallet",
 		"data:image/png;base64,",
@@ -278,5 +278,27 @@ console.log(JSON.stringify(out))`
 		if res.Nonce == nil || *res.Nonce != c.nonce {
 			t.Fatalf("range %d-%d: got %s, want nonce %d", c.start, c.end, raw, c.nonce)
 		}
+	}
+}
+
+// "auto" starts the puzzle at once ("One moment", the invoice folded away);
+// "off" offers no puzzle to people at all.
+func TestBrowserPoWModes(t *testing.T) {
+	f := newFixture(t)
+	f.gate.opt.BrowserPoW = BrowserPoWAuto
+	body := f.get("/premium/article", "", "text/html").Body.String()
+	for _, want := range []string{`<h1 id="pw-title">One moment</h1>`, `<p id="pw-intro">`, `data-mode="auto"`,
+		`<details id="pay"><summary>Pay 10 sats with Lightning instead</summary>`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("auto page lacks %q", want)
+		}
+	}
+	if strings.Contains(body, `id="pow-go"`) {
+		t.Error("auto page has the start button")
+	}
+	f.gate.opt.BrowserPoW = BrowserPoWOff
+	body = f.get("/premium/article", "", "text/html").Body.String()
+	if strings.Contains(body, `id="pow-box"`) || len(inlineScripts(body)) != 2 || !strings.Contains(body, `<details id="pay" open>`) {
+		t.Error("off page still offers the puzzle")
 	}
 }

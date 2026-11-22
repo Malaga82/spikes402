@@ -65,6 +65,7 @@ func TestInvalid(t *testing.T) {
 		"bad proxy":           `{"origin":"http://o","price_sats":5,"protect":["/x"],"trusted_proxies":["nope"],"lightning":{"backend":"fake"}}`,
 		"phoenixd no pw":      `{"origin":"http://o","price_sats":5,"protect":["/x"],"secret_key":"` + strings.Repeat("k", 32) + `","lightning":{"backend":"phoenixd"}}`,
 		"bad algorithm":       `{"origin":"http://o","price_sats":5,"protect":["/x"],"pow_algorithm":"scrypt","lightning":{"backend":"fake"}}`,
+		"bad browser_pow":     `{"origin":"http://o","price_sats":5,"protect":["/x"],"browser_pow":{"mode":"always"},"lightning":{"backend":"fake"}}`,
 		"argon memory bomb":   `{"origin":"http://o","price_sats":5,"protect":["/x"],"pow_algorithm":"argon2id","argon2_memory_mib":4096,"lightning":{"backend":"fake"}}`,
 		"argon too little":    `{"origin":"http://o","price_sats":5,"protect":["/x"],"pow_algorithm":"argon2id","argon2_memory_mib":1,"lightning":{"backend":"fake"}}`,
 		"argon too hard":      `{"origin":"http://o","price_sats":5,"protect":["/x"],"pow_algorithm":"argon2id","pow_difficulty":30,"lightning":{"backend":"fake"}}`,
