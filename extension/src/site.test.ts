@@ -35,6 +35,14 @@ describe("siteKey", () => {
     expect(siteKey("https://localhost:8443")).toBe("localhost:8443");
   });
 
+  it("has no site for hosts named like Object.prototype members", () => {
+    for (const o of ["https://constructor", "https://__proto__"]) { // hostnames are lower case: the only such members
+      expect(siteKey(o)).toBeUndefined();
+    }
+    expect(siteKey("https://constructor.example")).toBe("constructor.example");
+    expect(siteKey("https://tostring")).toBe("tostring");
+  });
+
   it("has no site for other http origins or other schemes", () => {
     for (const o of ["http://example.com", "http://192.168.1.5", "http://evil.localhost", "http://localhost.evil.com", "ftp://example.com", "file:///x", "null", "", "chrome-extension://abc"]) {
       expect(siteKey(o)).toBeUndefined();

@@ -79,6 +79,7 @@ function start(){
   work(D.header?"bitcoin":"sha256d");
 }
 document.addEventListener("spikes402-payment",pause);
+document.addEventListener("spikes402-payment-failed",function(){if(phase&&!done&&!(pay&&pay.open))start()});// the wallet gave up: back to work
 if(pay)pay.addEventListener("toggle",function(){if(pay.open)pause();else if(!done&&phase)start()});
 if(mode==="auto")start();else if(go)go.addEventListener("click",start);
 })();

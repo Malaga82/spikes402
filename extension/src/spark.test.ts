@@ -39,6 +39,15 @@ describe("spark backend send", () => {
     expect(wallet.payLightningInvoice.mock.calls[1][0].maxFeeSats).toBe(maxFeeSatsFor(250));
   });
 
+  it("strips a lightning: prefix before handing the invoice to Spark", async () => {
+    vi.useFakeTimers();
+    const { sparkBackend } = await import("./spark");
+    const p = sparkBackend.send("lightning:" + invoice.toUpperCase(), undefined, { maxFeeSats: 25 }).catch((e: unknown) => e);
+    await vi.advanceTimersByTimeAsync(61_000);
+    await p;
+    expect(wallet.payLightningInvoice.mock.calls[0][0].invoice).toBe(invoice);
+  });
+
   it("reports a timeout as pending, with the request id, not as a plain failure", async () => {
     vi.useFakeTimers();
     const { sparkBackend } = await import("./spark");

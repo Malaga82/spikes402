@@ -281,6 +281,17 @@ console.log(JSON.stringify(out))`
 	}
 }
 
+// The puzzle script registers its pause listener before the WebLN script can
+// start an automatic payment.
+func TestPuzzleScriptBeforeWallet(t *testing.T) {
+	f := newFixture(t)
+	f.gate.opt.BrowserPoW = BrowserPoWAuto
+	s := inlineScripts(f.get("/premium/article", "", "text/html").Body.String())
+	if len(s) != 3 || s[0] != wallJS || s[1] != weblnJS {
+		t.Fatalf("script order: %d scripts, first is the puzzle: %v", len(s), len(s) > 0 && s[0] == wallJS)
+	}
+}
+
 // "auto" starts the puzzle at once ("One moment", the invoice folded away);
 // "off" offers no puzzle to people at all.
 func TestBrowserPoWModes(t *testing.T) {
@@ -300,5 +311,48 @@ func TestBrowserPoWModes(t *testing.T) {
 	body = f.get("/premium/article", "", "text/html").Body.String()
 	if strings.Contains(body, `id="pow-box"`) || len(inlineScripts(body)) != 2 || !strings.Contains(body, `<details id="pay" open>`) {
 		t.Error("off page still offers the puzzle")
+	}
+}
+
+// The worker reports the best hash of the range it searched, compared on all
+// 256 bits, as Bitcoin shows it.
+func TestBrowserWorkerBestHash(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node not installed")
+	}
+	header := make([]byte, 76)
+	for i := range header {
+		header[i] = byte(i*13 + 1)
+	}
+	const end = 30000
+	best := ""
+	for n := uint32(0); n <= end; n++ {
+		d := pow.HeaderHash(header, n)
+		for i, j := 0, 31; i < j; i, j = i+1, j-1 {
+			d[i], d[j] = d[j], d[i]
+		}
+		if h := hex.EncodeToString(d[:]); best == "" || h < best {
+			best = h
+		}
+	}
+	worker := t.TempDir() + "/worker.js"
+	if err := os.WriteFile(worker, []byte(powWorkerJS), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	const run = `const vm=require("vm"),fs=require("fs");let out;const self={postMessage:m=>{out=m}};
+vm.runInNewContext(fs.readFileSync(process.argv[1],"utf8"),{self,TextEncoder,Date,Int32Array,Uint8Array,String,parseInt});
+self.onmessage({data:{header:process.argv[2],difficulty:40,start:0,end:+process.argv[3]}});
+console.log(JSON.stringify(out))`
+	raw, err := exec.Command(node, "-e", run, worker, hex.EncodeToString(header), strconv.Itoa(end)).Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var res struct {
+		Exhausted bool
+		Hash      string
+	}
+	if err := json.Unmarshal(raw, &res); err != nil || !res.Exhausted || res.Hash != best {
+		t.Fatalf("worker best %q (exhausted %v), Go best %q (%v)", res.Hash, res.Exhausted, best, err)
 	}
 }

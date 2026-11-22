@@ -112,12 +112,11 @@ async function handle(msg: PopupMsg | PageMsg | PagePriceMsg | AutoPayMsg, sende
     handlePagePrice(msg, sender);
     return { ok: true };
   }
-  if (msg.type !== "webln" && !isExtensionPage(sender, chrome.runtime.getURL(""))) {
-    throw new Error("This action is only available from the extension popup.");
-  }
   if (msg.type === "walletRequestId") {
     // The wallet host reports the Spark request id as soon as the send starts,
     // so a send whose answer is lost can still be looked up after a restart.
+    // Checked by exact URL, before the popup-only gate: on Firefox the host is
+    // a popup window, so its messages carry sender.tab.
     if (sender.url !== chrome.runtime.getURL("offscreen.html")) throw new Error("Only the wallet host can register a send.");
     const uncertain = await updateState((s) => {
       const r = s.reservations.find((x) => x.id === msg.id);
@@ -126,6 +125,9 @@ async function handle(msg: PopupMsg | PageMsg | PagePriceMsg | AutoPayMsg, sende
     });
     if (uncertain) scheduleReconcile();
     return { ok: true };
+  }
+  if (msg.type !== "webln" && !isExtensionPage(sender, chrome.runtime.getURL(""))) {
+    throw new Error("This action is only available from the extension popup.");
   }
   switch (msg.type) {
     case "getState":

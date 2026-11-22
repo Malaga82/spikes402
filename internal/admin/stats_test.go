@@ -55,6 +55,9 @@ func TestAgentName(t *testing.T) {
 		"curl/8.5.0": "curl",
 		"GPTBot/1.2 (+https://openai.com/gptbot)": "GPTBot",
 		"": "(no User-Agent)",
+		// Letters whose lower case is longer in UTF-8 must not shift the slice (used to panic).
+		"ȺȺȺȺȺȺȺȺȺȺȺȺȺȺȺȺȺȺȺȺ (compatible; EvilBot/1.0)": "EvilBot",
+		"Ⱥ compatible;": "Ⱥ",
 	} {
 		if got := agentName(ua); got != want {
 			t.Errorf("%q: %q, want %q", ua, got, want)
@@ -148,6 +151,18 @@ func TestSolveWindow(t *testing.T) {
 	s.add(gate.Event{Time: t0.Add(2 * time.Hour), Outcome: gate.OutcomePaid, Token: "never-seen", Resource: "GET /p"}, "v")
 	if b := s.hours[t0.Add(2*time.Hour).Truncate(time.Hour).Unix()]; b.SolveN != 0 || b.PoW != 1 || b.Paid != 1 || len(s.tokens) != 0 {
 		t.Fatalf("%+v, %d tokens", b, len(s.tokens))
+	}
+}
+
+// A flood of random paths cannot fill the page table for good: the pages
+// seen least recently make room, and the newest path is counted.
+func TestStatsPagesEvictOldest(t *testing.T) {
+	s, t0 := newStats(time.Unix(0, 0)), time.Unix(1_800_000_000, 0)
+	for i := 0; i < maxPages+10; i++ {
+		s.add(gate.Event{Time: t0.Add(time.Duration(i) * time.Second), Resource: fmt.Sprintf("GET /premium/%d", i), Outcome: gate.OutcomeChallenged}, "v")
+	}
+	if len(s.pages) > maxPages || s.pages[fmt.Sprintf("/premium/%d", maxPages+9)] == nil || s.pages["/premium/0"] != nil {
+		t.Fatalf("%d pages; newest kept, oldest evicted?", len(s.pages))
 	}
 }
 

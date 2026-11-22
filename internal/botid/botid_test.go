@@ -20,6 +20,7 @@ import (
 type fakeDNS struct {
 	ptr   map[string][]string
 	a     map[string][]string
+	aErr  map[string]error // forward lookup errors by name
 	fail  bool
 	calls atomic.Int64
 }
@@ -36,6 +37,9 @@ func (f *fakeDNS) LookupAddr(_ context.Context, addr string) ([]string, error) {
 }
 
 func (f *fakeDNS) LookupIPAddr(_ context.Context, host string) ([]net.IPAddr, error) {
+	if err := f.aErr[host]; err != nil {
+		return nil, err
+	}
 	var out []net.IPAddr
 	for _, s := range f.a[host] {
 		out = append(out, net.IPAddr{IP: net.ParseIP(s)})
@@ -248,5 +252,32 @@ func TestClassString(t *testing.T) {
 	got := Class{Kind: Verified, Name: "GPTBot", Method: "ip-list"}.String()
 	if got != `verified; name="GPTBot"; method=ip-list` {
 		t.Fatalf("got %s", got)
+	}
+}
+
+// A PTR name that does not exist (NXDOMAIN) confirms nothing: alone it makes
+// an impostor, not an unknown. A confirmed name is not undone by a later
+// name whose lookup fails.
+func TestForwardDNSNotFoundAndBreak(t *testing.T) {
+	c := New(bots, nil)
+	c.resolver = &fakeDNS{
+		ptr: map[string][]string{
+			"7.7.7.7":    {"nx.googlebot.com."},
+			"66.249.1.1": {"crawl-1.googlebot.com.", "broken.googlebot.com."},
+			"66.249.1.2": {"nx.googlebot.com.", "crawl-2.googlebot.com."},
+		},
+		a: map[string][]string{
+			"crawl-1.googlebot.com": {"66.249.1.1"},
+			"crawl-2.googlebot.com": {"66.249.1.2"},
+		},
+		aErr: map[string]error{
+			"nx.googlebot.com":     &net.DNSError{Err: "no such host", IsNotFound: true},
+			"broken.googlebot.com": &net.DNSError{Err: "timeout", IsTimeout: true},
+		},
+	}
+	for ip, want := range map[string]Kind{"7.7.7.7": Impostor, "66.249.1.1": Verified, "66.249.1.2": Verified} {
+		if got := c.Classify(req(googleUA), net.ParseIP(ip), "https"); got.Kind != want {
+			t.Errorf("%s: got %v, want %s", ip, got, want)
+		}
 	}
 }

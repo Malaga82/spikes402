@@ -73,9 +73,10 @@ function solveHeader(m) {
     compress(s2, w);
     attempts++;
     var ok = true;
-    if ((bswap(s2[7]) >>> 0) < lead) { // best hash so far, as Bitcoin shows it
-      lead = bswap(s2[7]) >>> 0; hash = "";
-      for (i = 7; i >= 0; i--) hash += hex8(bswap(s2[i]));
+    if ((bswap(s2[7]) >>> 0) <= lead) { // maybe the best hash so far, as Bitcoin shows it
+      var h = "";
+      for (i = 7; i >= 0; i--) h += hex8(bswap(s2[i]));
+      if (!hash || h < hash) { lead = bswap(s2[7]) >>> 0; hash = h; } // same-length hex: string order is number order
     }
     for (i = 0; i < zw; i++) if (s2[7 - i] !== 0) { ok = false; break; }
     if (ok && rb && (bswap(s2[7 - zw]) >>> (32 - rb)) !== 0) ok = false;
@@ -137,9 +138,10 @@ self.onmessage = function (e) {
     attempts++;
 
     var ok = true;
-    if ((s2[0] >>> 0) < lead) { // best hash so far
-      lead = s2[0] >>> 0; hash = "";
-      for (i = 0; i < 8; i++) hash += hex8(s2[i]);
+    if ((s2[0] >>> 0) <= lead) { // maybe the best hash so far
+      var h = "";
+      for (i = 0; i < 8; i++) h += hex8(s2[i]);
+      if (!hash || h < hash) { lead = s2[0] >>> 0; hash = h; }
     }
     for (i = 0; i < zw; i++) if (s2[i] !== 0) { ok = false; break; }
     if (ok && rb && (s2[zw] >>> (32 - rb)) !== 0) ok = false;

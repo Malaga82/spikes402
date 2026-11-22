@@ -19,7 +19,8 @@ describe("pageOrigin", () => {
   it("prefers sender.origin and falls back to the tab URL", () => {
     expect(pageOrigin({ origin: "https://pay.example" })).toBe("https://pay.example");
     expect(pageOrigin({ tab: { url: "https://pay.example/a?b=1" } })).toBe("https://pay.example");
-    expect(pageOrigin({ origin: "null", url: "https://pay.example/x" })).toBe("https://pay.example");
+    // A sandboxed document (opaque origin) is not the site in the tab's URL.
+    expect(pageOrigin({ origin: "null", url: "https://pay.example/x", tab: { url: "https://pay.example/x" } })).toBeUndefined();
     expect(pageOrigin({ origin: "chrome-extension://abc" })).toBeUndefined();
     expect(pageOrigin({})).toBeUndefined();
   });

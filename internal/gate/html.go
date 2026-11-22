@@ -121,7 +121,7 @@ box.hidden=false;
 var btn=document.getElementById("webln-pay"),msg=document.getElementById("webln-msg"),busy=false,KEY="spikes402-redeemed";
 function say(t,err){msg.textContent=t||"";msg.className=err?"err":""}
 function fail(e){
-  busy=false;btn.disabled=false;
+  busy=false;btn.disabled=false;document.dispatchEvent(new Event("spikes402-payment-failed"));
   var m=(e&&(e.message||e.reason)||e||"")+"";
   say(/reject|denied|cancel|user/i.test(m)?"Payment was cancelled or the wallet was declined. You can still pay the invoice above.":(m||"Payment failed."),"err");
 }
@@ -261,17 +261,19 @@ func writeHTML(w io.Writer, b challengeBody, qr template.URL, mode string) {
 		Claim     string
 	}{challengeBody: b, QR: qr, LD: ldJSON(b.Preview), WorkerSrc: workerSrc, Claim: ClaimPath, Tiles: pwTiles}
 	var scripts string
-	if b.L402 != nil {
-		scripts += "<script>" + weblnJS + "</script>\n"
-		scripts += "<script>" + invoiceJS + "</script>\n"
-	}
 	if mode == "" {
 		mode = BrowserPoWButton
 	}
+	// The puzzle script goes first: it listens for "spikes402-payment", which
+	// the WebLN script fires as soon as it starts paying, so the work pauses.
 	if data.Solve = mode != BrowserPoWOff && b.PoW.Algorithm != pow.Argon2id; data.Solve {
 		data.Mode, data.Auto = mode, mode == BrowserPoWAuto
 		data.Seconds = humanSeconds(math.Exp2(float64(b.PoW.Difficulty)) / browserHashrate)
 		scripts += "<script>" + wallJS + "</script>\n"
+	}
+	if b.L402 != nil {
+		scripts += "<script>" + weblnJS + "</script>\n"
+		scripts += "<script>" + invoiceJS + "</script>\n"
 	}
 	data.Script = template.HTML(scripts)
 	page.Execute(w, data)

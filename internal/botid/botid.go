@@ -269,12 +269,19 @@ func (c *Classifier) reverseDNS(b Bot, addr netip.Addr) (bool, error) {
 		}
 		ips, err := c.resolver.LookupIPAddr(ctx, name)
 		if err != nil {
+			var dnsErr *net.DNSError
+			if errors.As(err, &dnsErr) && dnsErr.IsNotFound {
+				continue // the name does not exist: it cannot confirm the address
+			}
 			return false, errors.New("forward DNS failed")
 		}
 		for _, a := range ips {
 			if fa, _ := netip.AddrFromSlice(a.IP); fa.Unmap() == addr {
 				ok = true
 			}
+		}
+		if ok {
+			break // confirmed: a later name's failure must not undo it
 		}
 	}
 

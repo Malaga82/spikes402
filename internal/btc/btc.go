@@ -63,6 +63,7 @@ type job struct {
 	height   uint64
 	received time.Time
 	gen      uint64
+	en2      atomic.Uint64 // last extranonce2 handed out: unique per job, so a new job starts again from 1
 }
 
 // Stats are the lottery's counters.
@@ -193,7 +194,7 @@ func (l *Lottery) Offer(bits int) (id uint32, en2 uint64, header []byte, ok bool
 	if jb == nil {
 		return 0, 0, nil, false
 	}
-	en2 = l.en2.Add(1)
+	en2 = jb.en2.Add(1)
 	if en2 == 0 || (jb.en2Size < 8 && en2 >= uint64(1)<<(8*jb.en2Size)) {
 		return 0, 0, nil, false
 	}

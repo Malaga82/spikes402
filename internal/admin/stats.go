@@ -181,7 +181,15 @@ func kindOf(e gate.Event) string {
 
 // agentName shortens a User-Agent to what a person recognises.
 func agentName(ua string) string {
-	l := strings.ToLower(ua)
+	// Lower case ASCII only, byte for byte, so indexes found in l are valid in
+	// ua (strings.ToLower can change the length: "Ⱥ" is 2 bytes, "ⱥ" is 3).
+	lb := []byte(ua)
+	for i, c := range lb {
+		if 'A' <= c && c <= 'Z' {
+			lb[i] = c + 'a' - 'A'
+		}
+	}
+	l := string(lb)
 	switch {
 	case ua == "":
 		return "(no User-Agent)"
@@ -447,7 +455,7 @@ func (s *Stats) page(path string, now time.Time) *PageStat {
 	p := s.pages[path]
 	if p == nil {
 		if len(s.pages) >= maxPages {
-			return &PageStat{Path: path, seen: map[string]struct{}{}} // counted nowhere: the table is full
+			evictOldest(s.pages, func(p *PageStat) time.Time { return p.LastSeen }) // random paths must not fill it for good
 		}
 		p = &PageStat{Path: path, seen: map[string]struct{}{}}
 		s.pages[path] = p
@@ -462,7 +470,7 @@ func (s *Stats) client(key, visitor string, e gate.Event, now time.Time) *Client
 	c := s.clients[key]
 	if c == nil {
 		if len(s.clients) >= maxClients {
-			s.evictClients()
+			evictOldest(s.clients, func(c *ClientStat) time.Time { return c.LastSeen })
 		}
 		c = &ClientStat{Visitor: visitor, Kind: KindUnknown, Agent: agentName(e.UserAgent), UserAgent: truncate(e.UserAgent, maxUserAgent), FirstSeen: now}
 		s.clients[key] = c
@@ -470,15 +478,15 @@ func (s *Stats) client(key, visitor string, e gate.Event, now time.Time) *Client
 	return c
 }
 
-// evictClients drops the tenth of clients seen least recently.
-func (s *Stats) evictClients() {
-	list := make([]string, 0, len(s.clients))
-	for k := range s.clients {
+// evictOldest drops the tenth of m seen least recently.
+func evictOldest[V any](m map[string]V, seen func(V) time.Time) {
+	list := make([]string, 0, len(m))
+	for k := range m {
 		list = append(list, k)
 	}
-	sort.Slice(list, func(i, j int) bool { return s.clients[list[i]].LastSeen.Before(s.clients[list[j]].LastSeen) })
+	sort.Slice(list, func(i, j int) bool { return seen(m[list[i]]).Before(seen(m[list[j]])) })
 	for _, k := range list[:max(1, len(list)/10)] {
-		delete(s.clients, k)
+		delete(m, k)
 	}
 }
 
@@ -673,10 +681,21 @@ func (s *Stats) save(path string) error {
 		tmp.Close()
 		return err
 	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return err
+	}
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	return os.Rename(tmp.Name(), path)
+	if err := os.Rename(tmp.Name(), path); err != nil {
+		return err
+	}
+	if d, err := os.Open(filepath.Dir(path)); err == nil { // make the rename durable; not possible on Windows, so best effort
+		d.Sync()
+		d.Close()
+	}
+	return nil
 }
 
 // run saves the statistics every interval while they change, and once more when ctx ends.

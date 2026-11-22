@@ -95,6 +95,13 @@ describe("parseBolt11PaymentHash and preimage check", () => {
     await expect(assertPreimageMatchesInvoice(invoice, "bb".repeat(32))).rejects.toThrow(InvoiceError);
   });
 
+  it("reads the payment hash when the amount contains the digit 1", () => {
+    const hash = Uint8Array.from({ length: 32 }, (_, i) => i + 1);
+    for (const hrp of ["lnbc10n", "lnbc100n", "lnbc1u", "lnbc10u", "lnbc210n", "lnbc1", "lnbcrt1u"]) {
+      expect(parseBolt11PaymentHash(makeInvoiceWithPaymentHash(hash, hrp))).toBe(hex(hash));
+    }
+  });
+
   it("rejects a short or odd preimage", async () => {
     const invoice = makeInvoiceWithPaymentHash(new Uint8Array(32));
     await expect(preimageMatchesInvoice(invoice, "aa")).rejects.toThrow(/32 bytes/);
@@ -112,7 +119,7 @@ function hex(bytes: Uint8Array): string {
 }
 
 /** Minimal lnbc…1 invoice carrying only a payment-hash tagged field. Checksum is fake. */
-function makeInvoiceWithPaymentHash(hash: Uint8Array): string {
+function makeInvoiceWithPaymentHash(hash: Uint8Array, hrp = "lnbc"): string {
   const bits: number[] = Array(7).fill(0); // timestamp
   bits.push(1, 1, 20); // type 1, length 52 (260 bits)
   let acc = 0;
@@ -127,5 +134,5 @@ function makeInvoiceWithPaymentHash(hash: Uint8Array): string {
   }
   if (n > 0) bits.push((acc << (5 - n)) & 31);
   bits.push(...Array(104).fill(0)); // signature
-  return encodeBolt11ForTest("lnbc", bits);
+  return encodeBolt11ForTest(hrp, bits);
 }

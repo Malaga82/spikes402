@@ -268,14 +268,27 @@ func TestLotteryOffersOnlyCurrentWork(t *testing.T) {
 		t.Fatal("offered a job before authorization")
 	}
 	l.conn = true
-	l.en2.Store(254)
+	l.jobs[l.order[0]].en2.Store(254)
 	if _, en2, _, ok := l.Offer(12); !ok || en2 != 255 {
 		t.Fatalf("last extranonce: %d, offered=%t", en2, ok)
 	}
 	if _, _, _, ok := l.Offer(12); ok {
 		t.Fatal("offered a reused extranonce")
 	}
-	l.en2.Store(0)
+	// A new job has extranonces of its own again.
+	j2, _, _ := parseNotify(params)
+	l.addJob(j2, false, l.gen)
+	if _, en2, _, ok := l.Offer(12); !ok || en2 != 1 {
+		t.Fatalf("new job: extranonce %d, offered=%t", en2, ok)
+	}
+	// A difficulty that arrives after the job applies to it.
+	if j2.poolDiff != 0 {
+		t.Fatalf("pool difficulty %v before any set_difficulty", j2.poolDiff)
+	}
+	l.notification(rpcMsg{Method: "mining.set_difficulty", Params: []byte("[0.5]")}, l.gen)
+	if j2.poolDiff != 0.5 {
+		t.Fatalf("pool difficulty %v after set_difficulty", j2.poolDiff)
+	}
 	now = now.Add(time.Minute)
 	if _, _, _, ok := l.Offer(12); ok {
 		t.Fatal("offered an expired job")

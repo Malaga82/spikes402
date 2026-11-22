@@ -15,6 +15,8 @@ export function isExtensionPage(sender: { url?: string; tab?: { id?: number } | 
 
 /** Origin of the page a content-script message came from. Never trust a value the page supplied. */
 export function pageOrigin(sender: { origin?: string; url?: string; tab?: { url?: string } }): string | undefined {
+  // A sandboxed document has an opaque origin: it is not the site in the tab's URL.
+  if (sender.origin === "null") return undefined;
   if (sender.origin && sender.origin !== "null" && /^https?:\/\//.test(sender.origin)) {
     return sender.origin;
   }

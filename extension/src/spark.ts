@@ -1,7 +1,7 @@
 import { SparkWallet } from "@buildonspark/spark-sdk";
 import type { WalletBackend } from "./backend";
 import { PaymentPendingError, WalletError } from "./backend";
-import { assertPreimageMatchesInvoice, isBolt11, parseBolt11AmountSats } from "./invoice";
+import { assertPreimageMatchesInvoice, isBolt11, normalizeInvoice, parseBolt11AmountSats } from "./invoice";
 import {
   feeSatsFromSendRequest,
   lightningHint,
@@ -100,7 +100,7 @@ export const sparkBackend: WalletBackend = {
       // The same fee rule the budget uses, from the amount that will be paid.
       const maxFeeSats = opts?.maxFeeSats ?? maxFeeSatsFor(amount ?? parseBolt11AmountSats(dest) ?? 10);
       const payment = await w.payLightningInvoice({
-        invoice: dest,
+        invoice: normalizeInvoice(dest),
         maxFeeSats,
         ...(amount !== undefined ? { amountSatsToSend: amount } : {}),
       }).catch(() => {

@@ -264,6 +264,11 @@ func (l *Lottery) notification(m rpcMsg, gen uint64) {
 			if d, ok := p[0].(float64); ok && d > 0 {
 				l.mu.Lock()
 				l.diff = d
+				for _, j := range l.jobs { // jobs that came before any difficulty would never send a share
+					if j.gen == gen && j.poolDiff == 0 {
+						j.poolDiff = d
+					}
+				}
 				l.mu.Unlock()
 			}
 		}
