@@ -92,7 +92,7 @@ func TestPassUnlocksOnePageBriefly(t *testing.T) {
 		t.Fatalf("redeem: got %d, origin calls %d (want 204 and none)", rec.Code, *calls)
 	}
 	pass := cookieNamed(rec, passPrefix)
-	if pass == nil || !pass.HttpOnly || pass.SameSite != http.SameSiteStrictMode || pass.MaxAge != int(PassTTL.Seconds()) || pass.Secure {
+	if pass == nil || !pass.HttpOnly || pass.SameSite != http.SameSiteStrictMode || pass.MaxAge != int(f.gate.opt.PassTTL.Seconds()) || pass.Secure {
 		t.Fatalf("bad pass cookie: %+v", pass)
 	}
 
@@ -125,7 +125,7 @@ func TestPassUnlocksOnePageBriefly(t *testing.T) {
 	}
 
 	// It ends.
-	f.now = f.now.Add(PassTTL + time.Second)
+	f.now = f.now.Add(f.gate.opt.PassTTL + time.Second)
 	if rec := f.send("GET", "/premium/a", nil, pass); rec.Code != http.StatusPaymentRequired {
 		t.Fatalf("expired pass: %d", rec.Code)
 	}
@@ -172,6 +172,42 @@ func TestPassCookieIsSecureOverHTTPS(t *testing.T) {
 }
 
 // Redeeming does not create invoices or offers.
+
+func TestPassTTLIsConfigurable(t *testing.T) {
+	f := newFixture(t)
+	f.gate.opt.PassTTL = 5 * time.Second
+	auth := f.pay(t, f.challenge(t, "/premium/a"))
+	rec := f.send("GET", "/premium/a", map[string]string{"Authorization": auth, RedeemHeader: "cookie"})
+	pass := cookieNamed(rec, passPrefix)
+	if rec.Code != http.StatusNoContent || pass == nil || pass.MaxAge != 5 {
+		t.Fatalf("5s pass: %d %+v", rec.Code, pass)
+	}
+	f.now = f.now.Add(4 * time.Second)
+	if rec := f.send("GET", "/premium/a", nil, pass); rec.Code != http.StatusOK {
+		t.Fatalf("still valid: %d", rec.Code)
+	}
+	f.now = f.now.Add(2 * time.Second)
+	if rec := f.send("GET", "/premium/a", nil, pass); rec.Code != http.StatusPaymentRequired {
+		t.Fatalf("expired at 6s: %d", rec.Code)
+	}
+}
+
+func TestPassTTLZeroIssuesNoCookie(t *testing.T) {
+	f := newFixture(t)
+	f.gate.opt.PassTTL = 0
+	auth := f.pay(t, f.challenge(t, "/premium/a"))
+	rec := f.send("GET", "/premium/a", map[string]string{"Authorization": auth, RedeemHeader: "cookie"})
+	if rec.Code != http.StatusNoContent || cookieNamed(rec, passPrefix) != nil {
+		t.Fatalf("zero ttl should be 204 with no cookie: %d %+v", rec.Code, rec.Result().Cookies())
+	}
+	if rec := f.get("/premium/a", "", ""); rec.Code != http.StatusPaymentRequired {
+		t.Fatalf("next request must pay again: %d", rec.Code)
+	}
+	if rec := f.get("/premium/a", auth, ""); rec.Code != http.StatusPaymentRequired {
+		t.Fatalf("spent token is still spent: %d", rec.Code)
+	}
+}
+
 func TestRedeemCreatesNoInvoices(t *testing.T) {
 	f := newFixture(t)
 	cb := &countingBackend{Backend: f.ln}

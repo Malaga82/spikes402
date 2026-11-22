@@ -11,7 +11,8 @@ Project page with a 25-second demo video: **https://malaga82.github.io/spikes402
 > **Status: experimental.** This is a first prototype. Do not use it with
 > real money on mainnet before an independent review.
 
-- One request = one payment. No accounts, no subscriptions, no time passes.
+- One request = one payment. Short access only, chosen by the site operator
+  (0-60 second pass, default 10 seconds); never accounts or subscriptions.
 - Non-custodial: payments go to *your own* Lightning node. Spikes402 never
   holds anyone's keys or funds.
 - A single Go binary, two small dependencies (QR codes and `golang.org/x/crypto`
@@ -57,9 +58,10 @@ website sets.
    with the invoice already shown (no second invoice). If the payment fits
    the wallet's budget, that can succeed without a further click. After
    paying, the page swaps the proof for a **pass**: a cookie (HttpOnly,
-   SameSite=Strict, one page, 60 seconds) and then loads the page for real, so
+   SameSite=Strict, one page, `pass_ttl_seconds` long, default 10, at most
+   60; 0 means no pass) and then loads the page for real, so
    its CSS, images and scripts work, files download normally, and a reload
-   within a minute does not pay again. The same page also shows an **Open in
+   within that lifetime does not pay again. The same page also shows an **Open in
    wallet** link (`lightning:`) and, after you pay with any Lightning wallet
    (a phone scanning the QR code, for example), unlocks on its own: it asks
    `/.spikes402/claim` every 1.5 seconds whether that invoice is paid, then
@@ -130,6 +132,7 @@ A JSON file (see [`config.example.json`](config.example.json)):
 | `argon2_memory_mib` | Memory per Argon2id attempt, 8–256 MiB | `16` |
 | `argon2_max_memory_mib` | Memory all concurrent Argon2id checks may use together. A check that needs more than this is refused at startup. Extra checks wait briefly, then `503` | `256` |
 | `challenge_ttl_seconds` | How long a 402 offer (token and invoice) stays valid | `600` |
+| `pass_ttl_seconds` | How long the post-unlock access pass lasts (0-60). `0` means every request needs a fresh payment or proof-of-work | `10` |
 | `challenges_per_minute` | 402 answers per client per minute; beyond that, `429 Too Many Requests` | `30` |
 | `max_invoices_per_minute` | Invoices created per minute, all clients together; beyond that, proof-of-work only | `300` |
 | `max_pending_invoices` | Open (unpaid, unexpired) invoices at once; beyond that, proof-of-work only | `10000` |
@@ -907,7 +910,7 @@ A 202 body `{"status":"unpaid"}` means not yet (honour `Retry-After`, about 2
 seconds). A 200 body `{"status":"paid","preimage":"<hex>"}` is the preimage;
 redeem the page as usual with `Authorization: L402 <token>:<preimage>`. The
 same token is also accepted with `Spikes402-Redeem: cookie` on a POST to the
-claim path: the response is 204 and a 60-second pass cookie for that
+claim path: the response is 204 and a pass cookie (`pass_ttl_seconds`, default 10) for that
 resource, so a browser can reload the page without handling the preimage.
 A 410 means the offer expired; a 401 means the token was missing or not
 ours. Only the holder of the HMAC-signed token can claim; knowing the

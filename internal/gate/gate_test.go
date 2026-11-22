@@ -40,6 +40,7 @@ func newFixture(t testing.TB) *fixture {
 		Protect:      []string{"/premium/**", "/*.pdf"},
 		PoW:          func(int64) pow.Params { return f.pow },
 		ChallengeTTL: time.Minute,
+		PassTTL:      DefaultPassTTL,
 		SecretKey:    []byte(strings.Repeat("s", 32)),
 		Lightning:    f.ln,
 		Next:         origin,

@@ -34,6 +34,7 @@ type Options struct {
 	Paused       bool                             // serve protected paths free; create no invoices
 	PoW          func(priceSats int64) pow.Params // the puzzle for a price
 	ChallengeTTL time.Duration                    // how long a 402 challenge stays valid
+	PassTTL      time.Duration                    // how long a post-unlock pass lasts; 0 means no pass; cap MaxPassTTL
 	SecretKey    []byte                           // signs tokens; keep it secret
 	Lightning    lightning.Backend
 	Next         http.Handler // where paid/free requests go (the origin)
@@ -121,7 +122,7 @@ type Gate struct {
 // input with the config package first.
 func New(opt Options) *Gate {
 	if len(opt.SecretKey) < 32 || opt.Lightning == nil || opt.Next == nil || opt.PriceSats < 1 ||
-		opt.ChallengeTTL <= 0 || opt.PoW == nil || opt.ChallengesPerMinute < 1 || opt.MaxPendingInvoices < 1 || opt.MaxInvoicesPerMinute < 1 {
+		opt.ChallengeTTL <= 0 || opt.PassTTL < 0 || opt.PassTTL > MaxPassTTL || opt.PoW == nil || opt.ChallengesPerMinute < 1 || opt.MaxPendingInvoices < 1 || opt.MaxInvoicesPerMinute < 1 {
 		panic("gate: invalid options")
 	}
 	spent := newSpentSet()

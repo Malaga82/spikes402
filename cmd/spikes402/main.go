@@ -131,6 +131,7 @@ func main() {
 		Paused:       cfg.Paused,
 		PoW:          cfg.PoW,
 		ChallengeTTL: cfg.ChallengeTTL(),
+		PassTTL:      cfg.PassTTL(),
 		SecretKey:    secret,
 		Lightning:    backend,
 		Next:         proxy,

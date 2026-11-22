@@ -57,7 +57,7 @@ func newEnvJSON(t *testing.T, adminExtra, rootExtra string) *env {
 	e := &env{ln: lightning.NewFake(), now: time.Unix(1_800_000_000, 0), file: file}
 	e.mon = NewMonitor(cfg.Admin.VisitorIPs, e.now)
 	e.gate = gate.New(gate.Options{
-		PriceSats: cfg.PriceSats, Protect: cfg.Protect, Prices: cfg.Prices, Paused: cfg.Paused, PoW: cfg.PoW, ChallengeTTL: cfg.ChallengeTTL(),
+		PriceSats: cfg.PriceSats, Protect: cfg.Protect, Prices: cfg.Prices, Paused: cfg.Paused, PoW: cfg.PoW, ChallengeTTL: cfg.ChallengeTTL(), PassTTL: cfg.PassTTL(),
 		SecretKey: []byte(strings.Repeat("s", 32)), Lightning: e.ln, Next: http.NotFoundHandler(),
 		ChallengesPerMinute: cfg.ChallengesPerMinute, MaxInvoicesPerMinute: 1000, MaxPendingInvoices: 1000,
 		Observer: e.mon.Observe,

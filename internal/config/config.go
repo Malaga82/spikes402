@@ -59,6 +59,7 @@ type Config struct {
 	Argon2MemoryMiB      int                `json:"argon2_memory_mib"`       // argon2id memory per attempt, default 16
 	Argon2MaxMemoryMiB   int                `json:"argon2_max_memory_mib"`   // concurrent Argon2id checks, default 256
 	ChallengeTTLSeconds  int                `json:"challenge_ttl_seconds"`   // default 600
+	PassTTLSeconds       *int               `json:"pass_ttl_seconds"`        // default 10; 0 = no pass; max 60
 	ChallengesPerMinute  int                `json:"challenges_per_minute"`   // per client, default 30
 	MaxInvoicesPerMinute int                `json:"max_invoices_per_minute"` // all clients together, default 300
 	MaxPendingInvoices   int                `json:"max_pending_invoices"`    // default 10000
@@ -213,6 +214,10 @@ func (c *Config) complete() error {
 	if c.ChallengeTTLSeconds == 0 {
 		c.ChallengeTTLSeconds = 600
 	}
+	if c.PassTTLSeconds == nil {
+		v := int(gate.DefaultPassTTL / time.Second)
+		c.PassTTLSeconds = &v
+	}
 	if c.PowSecondsPerSat == 0 {
 		c.PowSecondsPerSat = 10
 	}
@@ -361,6 +366,9 @@ func (c *Config) complete() error {
 	}
 	if c.ChallengeTTLSeconds < 10 {
 		return errors.New(`"challenge_ttl_seconds" must be at least 10`)
+	}
+	if *c.PassTTLSeconds < 0 || *c.PassTTLSeconds > int(gate.MaxPassTTL/time.Second) {
+		return errors.New(`"pass_ttl_seconds" must be between 0 and 60`)
 	}
 	if c.ChallengesPerMinute < 1 || c.MaxInvoicesPerMinute < 1 || c.MaxPendingInvoices < 1 {
 		return errors.New(`"challenges_per_minute", "max_invoices_per_minute" and "max_pending_invoices" must be at least 1`)
@@ -598,6 +606,14 @@ func (c *Config) ChallengeTTL() time.Duration {
 	return time.Duration(c.ChallengeTTLSeconds) * time.Second
 }
 
+// PassTTL returns how long a post-unlock pass lasts. Zero means no pass.
+func (c *Config) PassTTL() time.Duration {
+	if c.PassTTLSeconds == nil {
+		return gate.DefaultPassTTL
+	}
+	return time.Duration(*c.PassTTLSeconds) * time.Second
+}
+
 // Changes are the settings an admin may change at run time. Nil fields
 // stay as they are. Changes last until restart: edit the file to keep them.
 type Changes struct {
@@ -678,6 +694,7 @@ type Public struct {
 	Argon2MemoryMiB      int                    `json:"argon2_memory_mib,omitempty"`
 	CurrentPoW           pow.Params             `json:"current_pow"`
 	ChallengeTTLSeconds  int                    `json:"challenge_ttl_seconds"`
+	PassTTLSeconds       int                    `json:"pass_ttl_seconds"`
 	ChallengesPerMinute  int                    `json:"challenges_per_minute"`
 	MaxInvoicesPerMinute int                    `json:"max_invoices_per_minute"`
 	MaxPendingInvoices   int                    `json:"max_pending_invoices"`
@@ -696,7 +713,7 @@ func (c *Config) Public() Public {
 	p := Public{
 		Origin: c.Origin, Protect: append([]string(nil), c.Protect...), PriceSats: c.PriceSats, Prices: c.Prices, Surge: c.Surge, Paused: c.Paused, PowAlgorithm: c.PowAlgorithm,
 		PowSecondsPerSat: c.PowSecondsPerSat, PowDifficulty: c.PowDifficulty, Argon2MemoryMiB: c.Argon2MemoryMiB,
-		CurrentPoW: c.PoW(c.PriceSats), ChallengeTTLSeconds: c.ChallengeTTLSeconds, ChallengesPerMinute: c.ChallengesPerMinute,
+		CurrentPoW: c.PoW(c.PriceSats), ChallengeTTLSeconds: c.ChallengeTTLSeconds, PassTTLSeconds: int(c.PassTTL() / time.Second), ChallengesPerMinute: c.ChallengesPerMinute,
 		MaxInvoicesPerMinute: c.MaxInvoicesPerMinute, MaxPendingInvoices: c.MaxPendingInvoices,
 		IdentifyBots: c.IdentifyBotsOn(), BotPolicies: c.BotPolicies, LightningBackend: c.Lightning.Backend,
 		AICanApply: c.Admin.AICanApply, VisitorIPs: c.Admin.VisitorIPs, WithdrawEnabled: c.Withdraw.Enabled,
