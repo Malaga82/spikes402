@@ -69,6 +69,8 @@ h1 .accent { background: linear-gradient(100deg, var(--copper-2), var(--copper) 
 .btn { display: inline-flex; align-items: center; gap: .5rem; padding: .7rem 1.15rem; border-radius: 10px; font-weight: 600; border: 1px solid var(--line); color: var(--text); background: var(--card); }
 .btn:hover { text-decoration: none; border-color: var(--copper); }
 .btn.primary { background: linear-gradient(135deg, var(--copper-2), var(--copper) 60%, var(--copper-deep)); color: #1a0f06; border: 0; box-shadow: 0 8px 24px var(--glow); }
+:root[data-theme="light"] .btn.primary { color: #fff; }
+@media (prefers-color-scheme: light) { :root:not([data-theme="dark"]) .btn.primary { color: #fff; } }
 .meta { margin-top: 1.4rem; font-size: .9rem; color: var(--muted); }
 
 .video { position: relative; border-radius: 16px; overflow: hidden; border: 1px solid var(--line); box-shadow: var(--shadow); background: #000; }
