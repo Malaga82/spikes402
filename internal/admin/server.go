@@ -13,6 +13,7 @@ import (
 	"maps"
 	"net"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -32,7 +33,8 @@ type Role string
 
 // Roles. The AI may read and propose changes; it may apply them only if
 // "admin.ai_can_apply" is set, and only when the change does not reduce
-// protection. It can never withdraw or approve proposals.
+// protection or need confirmation against the last settings a person
+// applied. It can never withdraw or approve proposals.
 const (
 	RoleAdmin Role = "admin"
 	RoleAI    Role = "ai"
@@ -63,9 +65,11 @@ type Server struct {
 	started    time.Time
 	now        func() time.Time
 
-	mu         sync.Mutex // guards cfg and changes to the gate's settings
-	cfg        *config.Config
-	configFile string
+	mu          sync.Mutex // guards cfg, baseline, and changes to the gate's settings
+	cfg         *config.Config
+	configFile  string
+	baseline    *config.Config // last settings a person applied; AI drift is measured against this
+	baselineErr error          // set if the confirmed file exists but could not be read
 
 	nodeMu    sync.Mutex
 	nodeAt    time.Time
@@ -93,7 +97,43 @@ func New(o Options) *Server {
 		s.wd = newWithdrawals(o.Config.Withdraw.Destination, o.Config.Withdraw.Password, o.IntentStore)
 		s.loadIntent()
 	}
+	s.initBaseline()
 	return s
+}
+
+// initBaseline loads the last human-applied settings, or records the
+// current config as that baseline when the file is not there yet.
+func (s *Server) initBaseline() {
+	s.baseline = s.cfg
+	path := s.cfg.ConfirmedFile()
+	if path == "" {
+		return
+	}
+	b, err := config.ReadSnapshotFile(path, s.cfg)
+	if err == nil {
+		s.baseline = b
+		return
+	}
+	if !os.IsNotExist(err) {
+		s.baselineErr = err
+		log.Printf("admin: could not read confirmed settings from %s: %v (AI apply is blocked until a human saves settings)", path, err)
+		return
+	}
+	if err := config.WriteOverrides(path, s.cfg); err != nil {
+		log.Printf("admin: could not save confirmed settings to %s: %v", path, err)
+	}
+}
+
+// rememberConfirmed records n as the last settings a person applied.
+// Called under s.mu after a successful human apply.
+func (s *Server) rememberConfirmed(n *config.Config) {
+	s.baseline = n
+	s.baselineErr = nil
+	if path := n.ConfirmedFile(); path != "" {
+		if err := config.WriteOverrides(path, n); err != nil {
+			log.Printf("admin: settings applied but confirmed baseline not saved to %s: %v", path, err)
+		}
+	}
 }
 
 // Handler returns the HTTP handler: the dashboard at "/" and the API at "/api/".
@@ -350,7 +390,14 @@ func (s *Server) apply(ch config.Changes, by Role) (config.Public, error) {
 		if why := config.WeakensProtection(s.cfg, n); len(why) > 0 {
 			return config.Public{}, fail(http.StatusForbidden, "this would reduce protection (%s); propose it for the human admin to approve", strings.Join(why, "; "))
 		}
-		if why := config.NeedsConfirmation(s.cfg, n); len(why) > 0 {
+		if s.baselineErr != nil {
+			return config.Public{}, fail(http.StatusForbidden, "confirmed settings could not be read; propose this for the human admin to approve")
+		}
+		base := s.baseline
+		if base == nil {
+			base = s.cfg
+		}
+		if why := config.NeedsConfirmation(base, n); len(why) > 0 {
 			return config.Public{}, fail(http.StatusForbidden, "this needs a human to confirm it (%s); propose it for the human admin to approve", strings.Join(why, "; "))
 		}
 	}
@@ -370,6 +417,9 @@ func (s *Server) apply(ch config.Changes, by Role) (config.Public, error) {
 		return config.Public{}, fail(http.StatusInternalServerError, "settings were saved but could not be applied: %v", err)
 	}
 	s.cfg = n
+	if by == RoleAdmin {
+		s.rememberConfirmed(n)
+	}
 	b, _ := json.Marshal(ch)
 	log.Printf("admin: settings changed by %s: %s (saved to %s)", by, b, path)
 	return n.Public(), nil
@@ -395,7 +445,7 @@ func mergeBotPolicies(current, incoming map[string]gate.Policy) map[string]gate.
 }
 
 // proposalOut is a proposal plus what a human should look at before
-// approving it, judged against the current settings.
+// approving it, judged against the last settings a person applied.
 type proposalOut struct {
 	Proposal
 	Risks []string `json:"risks,omitempty"`
@@ -403,12 +453,17 @@ type proposalOut struct {
 
 // risks lists why approving ch needs an explicit confirmation.
 func (s *Server) risks(ch config.Changes) []string {
-	cur := s.config()
+	s.mu.Lock()
+	cur, base, baseErr := s.cfg, s.baseline, s.baselineErr
+	s.mu.Unlock()
 	n, err := cur.Apply(ch)
 	if err != nil {
 		return nil
 	}
-	return config.NeedsConfirmation(cur, n)
+	if base == nil || baseErr != nil {
+		base = cur
+	}
+	return config.NeedsConfirmation(base, n)
 }
 
 func (s *Server) listProposals(_ http.ResponseWriter, _ *http.Request, _ Role) (any, error) {

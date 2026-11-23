@@ -82,19 +82,9 @@ func applyOverridesFile(c *Config, configFile string) (*Config, error) {
 	if path == "" {
 		return c, nil
 	}
-	data, err := os.ReadFile(path)
+	n, err := ReadSnapshotFile(path, c)
 	if err != nil {
 		return nil, err
-	}
-	var o overrideFile
-	dec := json.NewDecoder(strings.NewReader(string(data)))
-	dec.DisallowUnknownFields()
-	if err := dec.Decode(&o); err != nil {
-		return nil, fmt.Errorf("%s: %w", path, err)
-	}
-	n, err := c.Apply(o.changes())
-	if err != nil {
-		return nil, fmt.Errorf("%s: %w", path, err)
 	}
 	fields := changedOverrideFields(c, n)
 	if len(fields) == 0 {
@@ -240,4 +230,25 @@ func WriteOverrides(path string, c *Config) error {
 	}
 	ok = true
 	return nil
+}
+
+// ReadSnapshotFile reads a dashboard-settings snapshot written by
+// WriteOverrides and applies those fields onto base. Secrets and other
+// file-only fields stay from base.
+func ReadSnapshotFile(path string, base *Config) (*Config, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var o overrideFile
+	dec := json.NewDecoder(strings.NewReader(string(data)))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&o); err != nil {
+		return nil, fmt.Errorf("%s: %w", path, err)
+	}
+	n, err := base.Apply(o.changes())
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", path, err)
+	}
+	return n, nil
 }

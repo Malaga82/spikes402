@@ -100,6 +100,9 @@ const (
 // they were not, a big price jump, or a sharp cut in challenges. The AI
 // may not apply these, and the dashboard asks the human to confirm them,
 // even when ai_can_apply is on. An empty list means no extra confirmation.
+// When the AI applies a change, cur should be the last settings a person
+// applied, not the previous AI step, so many small changes cannot add up
+// to these limits.
 func NeedsConfirmation(cur, next *Config) []string {
 	if cur == nil || next == nil {
 		return nil

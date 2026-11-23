@@ -80,7 +80,8 @@ These are known and not fixed yet. Contributions are welcome.
   price). It cannot apply a change that would reduce protection (making
   pages free, lowering prices, easier proof-of-work, narrowing `protect`)
   or one that could take the site down (a whole-site `protect` pattern,
-  blocking or charging verified crawlers, a big price jump), toggle pause, withdraw, or approve proposals. Those stay suggestions
+  blocking or charging verified crawlers, a big price jump or a sharp
+  rate-limit cut from the last settings a person applied), toggle pause, withdraw, or approve proposals. Those stay suggestions
   for the human admin. It still reads text chosen by visitors (paths, bot
   host names), which could carry prompt injection. Leave `ai_can_apply`
   off, or review its proposals.

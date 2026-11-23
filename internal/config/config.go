@@ -194,6 +194,15 @@ func (c *Config) OverridesFile() string {
 	return filepath.Join(c.StateDir, "config.overrides.json")
 }
 
+// ConfirmedFile is the last dashboard settings a human applied, used to
+// measure AI drift: state_dir/config.confirmed.json.
+func (c *Config) ConfirmedFile() string {
+	if c == nil || c.StateDir == "" {
+		return ""
+	}
+	return filepath.Join(c.StateDir, "config.confirmed.json")
+}
+
 func (c *Config) complete() error {
 	if c.Listen == "" {
 		c.Listen = ":8402"

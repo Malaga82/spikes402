@@ -670,7 +670,11 @@ Everything else sits behind the discreet **Settings** link:
   (values are not secrets). A leftover `config.overrides.json` next to
   the config file is still read if the `state_dir` copy is not there yet;
   the next dashboard save writes to `state_dir`. Delete the overrides
-  file if you want the config file values back. Everything about money or
+  file if you want the config file values back. The last settings a
+  person applied are also kept under `state_dir` as
+  `config.confirmed.json`, so the AI cannot reach those confirmation
+  limits through many small steps; delete that file too if you want that
+  baseline reset. Everything about money or
   the perimeter stays in the config file on purpose: passwords and keys,
   the Lightning node, the withdraw destination, node anti-flood limits
   (`max_invoices_per_minute`, `max_pending_invoices`), surge pricing,
@@ -688,8 +692,9 @@ Everything else sits behind the discreet **Settings** link:
   warning, in the dashboard. So does anything that could take the site
   down even though it looks stricter: a whole-site `protect` pattern
   (`/`, `/**`), making verified crawlers or signed agents pay or be
-  blocked, a price more than doubling (or above 1000 sats), or cutting
-  `challenges_per_minute` by more than half. Those proposals are marked in
+  blocked, a price more than doubling from the last settings a person
+  applied (or above 1000 sats), or cutting `challenges_per_minute` by
+  more than half from those same settings. Those proposals are marked in
   the dashboard and the API only applies them with an explicit
   confirmation (`POST /api/proposals/{id}/approve?confirm=1`). A collapsed list shows all current settings
   (no secrets) and node details;
