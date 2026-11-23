@@ -72,6 +72,9 @@ These are known and not fixed yet. Contributions are welcome.
   addresses a minute; beyond that, new clients share one bucket and get
   `429`. An attacker with that many addresses (easy with IPv6) can lock out
   new visitors for a while. The Lightning node stays protected.
+- **Reverse DNS saturation.** The crawler classifier limits concurrent DNS
+  lookups. When those slots are full, requests that need a new lookup are
+  classified as unknown and follow the configured unknown-client policy.
 - **AI admin with `ai_can_apply`.** When enabled, the AI admin can apply
   changes that make protection stricter or equal (for example a higher
   price). It cannot apply a change that would reduce protection (making

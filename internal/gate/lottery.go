@@ -26,7 +26,7 @@ type Lottery interface {
 	// Check verifies a nonce and returns what to record after the first redemption.
 	// It returns pow.ErrJobGone if the job is no longer known.
 	Check(job uint32, en2 uint64, nonce uint32, bits int) (record func(), err error)
-	// Has reports whether job is still kept, so a cached offer's header is still worth solving.
+	// Has reports whether the job can still be used for new challenges.
 	Has(job uint32) bool
 }
 

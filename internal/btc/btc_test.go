@@ -285,7 +285,10 @@ func TestLotteryOffersOnlyCurrentWork(t *testing.T) {
 	}
 	// A new job has extranonces of its own again.
 	j2, _, _ := parseNotify(params)
-	l.addJob(j2, false, l.gen)
+	l.addJob(j2, true, l.gen)
+	if l.Has(j.id) || !l.Has(j2.id) {
+		t.Fatal("a clean job must supersede cached work for the previous block")
+	}
 	if _, en2, _, ok := l.Offer(12); !ok || en2 != 1 {
 		t.Fatalf("new job: extranonce %d, offered=%t", en2, ok)
 	}

@@ -625,6 +625,8 @@ func (g *Gate) challenge(w http.ResponseWriter, r *http.Request, set *Settings, 
 			http.Error(w, "internal error", http.StatusInternalServerError)
 			return
 		}
+	} else if g.opt.Lottery != nil && (o.lottery == nil || !g.opt.Lottery.Has(o.lottery.job)) {
+		o.lottery = g.pending.updateLottery(key, o, g.newLotteryOffer(r, o))
 	}
 	if ri := info(r); ri != nil {
 		ri.token, ri.price, ri.alg = o.id, o.price, o.pow.Algorithm
@@ -633,9 +635,6 @@ func (g *Gate) challenge(w http.ResponseWriter, r *http.Request, set *Settings, 
 		g.observe(r, class, OutcomeRejected)
 	} else {
 		g.observe(r, class, OutcomeChallenged)
-	}
-	if o.lottery != nil && !g.opt.Lottery.Has(o.lottery.job) {
-		o.lottery = g.newLotteryOffer(r, o) // a new block made the cached header stale
 	}
 	g.writeChallenge(w, r, o, problem, o.lottery)
 }

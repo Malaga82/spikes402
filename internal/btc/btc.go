@@ -206,12 +206,12 @@ func (l *Lottery) currentLocked(j *job) bool {
 		l.now().Sub(j.received) < min(l.opt.JobTTL, staleForSubmit)
 }
 
-// Has reports whether job id is still kept.
+// Has reports whether the job can still be used for new challenges.
 func (l *Lottery) Has(id uint32) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	_, ok := l.jobs[id]
-	return ok
+	j := l.jobs[id]
+	return j != nil && l.currentLocked(j)
 }
 
 // Check verifies an answer: job id's header with extranonce2 en2 and nonce

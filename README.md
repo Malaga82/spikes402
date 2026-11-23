@@ -477,7 +477,9 @@ your address. Nothing else changes for the site.
   anyone on the path can rewrite the `mining.authorize` that carries your
   payout address, or feed fake jobs (then only the lottery suffers; the
   gate falls back to the ordinary puzzle). Spikes402 caps what a pool may
-  send (32 merkle levels, an 8 KiB coinbase, no absurd share difficulty).
+  send (32 merkle levels and an 8 KiB coinbase). The client ignores share
+  difficulties below `1e-9`. A low difficulty above that floor can still
+  qualify every solved challenge as a share.
 
 ## Bot identification
 

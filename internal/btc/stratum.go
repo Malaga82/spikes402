@@ -26,7 +26,7 @@ const (
 	minBackoff    = time.Second
 	maxBackoff    = time.Minute
 	writeDeadline = 10 * time.Second
-	minPoolDiff   = 1e-9 // below this every proof would be a share: a broken or hostile pool
+	minPoolDiff   = 1e-9 // absolute floor for the pool's advertised share difficulty
 )
 
 type dialer func(ctx context.Context, addr string) (net.Conn, error)

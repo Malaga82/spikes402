@@ -131,6 +131,20 @@ func (p *pendingOffers) get(key string, now time.Time, minLeft time.Duration) (o
 	return o, true
 }
 
+// updateLottery keeps the first refresh of an offer and never restores a dropped offer.
+func (p *pendingOffers) updateLottery(key string, old offer, next *lotteryOffer) *lotteryOffer {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if o, ok := p.offers[key]; ok && o.id == old.id {
+		if o.lottery != old.lottery {
+			return o.lottery
+		}
+		o.lottery = next
+		p.offers[key] = o
+	}
+	return next
+}
+
 // reserve holds one invoice slot. The caller must put or cancelReserve.
 func (p *pendingOffers) reserve(now time.Time) bool {
 	p.mu.Lock()

@@ -17,6 +17,7 @@ import (
 type fakeLottery struct {
 	mu     sync.Mutex
 	en2    uint64
+	job    uint32
 	down   bool
 	gone   bool
 	checks int
@@ -37,15 +38,15 @@ func (f *fakeLottery) Offer(bits int) (uint32, uint64, []byte, bool) {
 		return 0, 0, nil, false
 	}
 	f.en2++
-	return 7, f.en2, fakeHeader(7, f.en2), true
+	return f.job, f.en2, fakeHeader(f.job, f.en2), true
 }
 
 func (f *fakeLottery) Check(job uint32, en2 uint64, nonce uint32, bits int) (func(), error) {
 	f.mu.Lock()
 	f.checks++
-	gone := f.gone
+	gone := f.gone || job < 7 || job > f.job
 	f.mu.Unlock()
-	if gone || job != 7 {
+	if gone {
 		return nil, pow.ErrJobGone
 	}
 	if !(pow.BitcoinWork{Header: fakeHeader(job, en2), Bits: bits}).Check(nonce) {
@@ -63,12 +64,12 @@ func (f *fakeLottery) Status() any { return "playing" }
 func (f *fakeLottery) Has(job uint32) bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return job == 7 && !f.gone
+	return job == f.job && !f.gone && !f.down
 }
 
 func newLotteryFixture(t *testing.T) (*fixture, *fakeLottery) {
 	f := newFixture(t)
-	l := &fakeLottery{}
+	l := &fakeLottery{job: 7}
 	f.gate.opt.Lottery = l
 	return f, l
 }
@@ -200,21 +201,28 @@ func TestLotteryOff(t *testing.T) {
 func TestLotteryChallengeBelongsToTheOffer(t *testing.T) {
 	f, l := newLotteryFixture(t)
 	const client = "203.0.113.1:1"
-	b1, sess := f.offerFor(t, client, "/premium/a", "")
+	l.down = true
+	offline, sess := f.offerFor(t, client, "/premium/a", "")
+	if offline.L402 == nil || offline.Lottery != nil {
+		t.Fatal("expected a cached invoice without lottery")
+	}
+	l.down = false
+	b1, _ := f.offerFor(t, client, "/premium/a", sess)
+	if b1.L402 == nil || b1.L402.Token != offline.L402.Token {
+		t.Fatal("recovering the lottery must reuse the invoice")
+	}
 	b2, _ := f.offerFor(t, client, "/premium/a", sess)
 	if b1.Lottery == nil || b2.Lottery == nil || b1.Lottery.Challenge != b2.Lottery.Challenge || l.en2 != 1 {
 		t.Fatalf("reload: lottery %v / %v, %d headers handed out", b1.Lottery, b2.Lottery, l.en2)
 	}
-	l.mu.Lock()
-	l.gone = true // a new block
-	l.mu.Unlock()
+	l.job++ // a new block
 	b3, _ := f.offerFor(t, client, "/premium/a", sess)
 	if b3.L402 == nil || b3.L402.Token != b1.L402.Token || b3.Lottery == nil || b3.Lottery.Challenge == b1.Lottery.Challenge {
 		t.Fatal("a stale header must be replaced in the same offer")
 	}
-	l.mu.Lock()
-	l.gone = false
-	l.mu.Unlock()
+	if next, _ := f.offerFor(t, client, "/premium/a", sess); next.Lottery == nil || next.Lottery.Challenge != b3.Lottery.Challenge || l.en2 != 2 {
+		t.Fatal("reload did not reuse the refreshed challenge")
+	}
 	if rec := f.get("/premium/a", solveLottery(t, b3.Lottery), ""); rec.Code != http.StatusOK {
 		t.Fatalf("lottery answer: %d", rec.Code)
 	}
