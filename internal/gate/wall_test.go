@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -35,7 +36,7 @@ func TestEnergyWallPage(t *testing.T) {
 		t.Fatalf("got %d, want 402", rec.Code)
 	}
 	for _, want := range []string{
-		`<h1 id="pw-title">Pay or PoW</h1>`,
+		`<span id="pw-title">Pay or PoW</span>`,
 		`href="https://github.com/Choffolo/spikes402#browser-wallet-extension-prototype"`,
 		`<details id="pay" open><summary hidden>Pay 10 sats with Lightning instead</summary>`,
 		`id="pow-go">No sats? Do the challenge instead</button>`, "about 1 s of computing in your browser",
@@ -48,6 +49,14 @@ func TestEnergyWallPage(t *testing.T) {
 		`id="webln-pay"`, // the Lightning invoice flow is still there
 		`id="open-wallet"`, `id="pay-wait"`, "Open in wallet",
 		"data:image/png;base64,",
+		`class="logo"`,
+		`aria-hidden="true"`,
+		`class="logo-link"`,
+		`href="/"`,
+		`aria-label="Back to the site"`,
+		`rel="icon"`,
+		`type="image/svg+xml"`,
+		"data:image/svg",
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("page lacks %q", want)
@@ -58,12 +67,13 @@ func TestEnergyWallPage(t *testing.T) {
 	if !strings.Contains(body, `data-challenge="`+token+`"`) {
 		t.Error("puzzle and invoice use different tokens")
 	}
-	// Nothing from outside, nothing inline beyond the two hashed scripts.
-	if strings.Contains(body, "<script src") || strings.Contains(body, "http://") {
+	// Nothing from outside, nothing inline beyond the hashed scripts.
+	// The inline logo's xmlns is http://www.w3.org/2000/svg, not a fetch.
+	if strings.Contains(body, "<script src") || strings.Contains(body, `src="http://`) || strings.Contains(body, `href="http://`) {
 		t.Error("page loads or links something external")
 	}
 	csp := rec.Header().Get("Content-Security-Policy")
-	for _, want := range []string{"default-src 'none'", "worker-src 'self'", "connect-src 'self'", "frame-ancestors 'none'"} {
+	for _, want := range []string{"default-src 'none'", "img-src data:", "worker-src 'self'", "connect-src 'self'", "frame-ancestors 'none'"} {
 		if !strings.Contains(csp, want) {
 			t.Errorf("CSP %q lacks %q", csp, want)
 		}
@@ -298,7 +308,7 @@ func TestBrowserPoWModes(t *testing.T) {
 	f := newFixture(t)
 	f.gate.opt.BrowserPoW = BrowserPoWAuto
 	body := f.get("/premium/article", "", "text/html").Body.String()
-	for _, want := range []string{`<h1 id="pw-title">One moment</h1>`, `<p id="pw-intro">`, `data-mode="auto"`,
+	for _, want := range []string{`<span id="pw-title">One moment</span>`, `<p id="pw-intro">`, `data-mode="auto"`,
 		`<details id="pay"><summary>Pay 10 sats with Lightning instead</summary>`} {
 		if !strings.Contains(body, want) {
 			t.Errorf("auto page lacks %q", want)
@@ -354,5 +364,42 @@ console.log(JSON.stringify(out))`
 	}
 	if err := json.Unmarshal(raw, &res); err != nil || !res.Exhausted || res.Hash != best {
 		t.Fatalf("worker best %q (exhausted %v), Go best %q (%v)", res.Hash, res.Exhausted, best, err)
+	}
+}
+
+func TestLogoAssetMatchesEmbed(t *testing.T) {
+	want, err := os.ReadFile(filepath.Join("..", "..", "assets", "logo.svg"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(want) != logoSVG {
+		t.Fatal("assets/logo.svg and internal/gate/assets/logo.svg differ")
+	}
+	if strings.Contains(string(logoInline), "<?xml") {
+		t.Error("inline logo still carries an XML declaration")
+	}
+	if !strings.HasPrefix(string(logoFavicon), "data:image/svg+xml;base64,") {
+		t.Fatalf("favicon is not a data URI: %s", logoFavicon[:40])
+	}
+}
+
+func TestWallPriceUnit(t *testing.T) {
+	if satUnit(1) != "sat" || satUnit(2) != "sats" || satUnit(10) != "sats" {
+		t.Fatalf("satUnit: 1=%q 2=%q 10=%q", satUnit(1), satUnit(2), satUnit(10))
+	}
+
+	f := newFixture(t)
+	body := f.get("/premium/article", "", "text/html").Body.String()
+	if !strings.Contains(body, "This page costs <strong>10 sats</strong>") || !strings.Contains(body, "Pay 10 sats with Lightning instead") {
+		t.Error("default price should read \"10 sats\"")
+	}
+
+	f.gate.live.Store(&Settings{PriceSats: 1, Protect: []string{"/premium/**"}, PoW: f.gate.opt.PoW, ChallengesPerMinute: 1000})
+	body = f.get("/premium/article", "", "text/html").Body.String()
+	if !strings.Contains(body, "This page costs <strong>1 sat</strong>") || !strings.Contains(body, "Pay 1 sat with Lightning instead") {
+		t.Error("a price of 1 should read \"1 sat\"")
+	}
+	if strings.Contains(body, "1 sats") {
+		t.Error("a price of 1 still says \"1 sats\"")
 	}
 }

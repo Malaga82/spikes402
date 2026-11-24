@@ -1,4 +1,4 @@
-# Spikes402 — Pay or PoW
+# <img src="assets/logo.svg" alt="Spikes402" width="40" height="40"> Spikes402 — Pay or PoW
 
 **Spikes402** is a small reverse proxy you put in front of a website. On the
 paths you choose, AI bots and crawlers must either **pay** a few sats over

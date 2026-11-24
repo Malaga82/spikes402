@@ -26,11 +26,16 @@ export function badgeColor(state: TabPrice): string {
   return PRICE;
 }
 
+export function satWord(n: number): string {
+  return n === 1 ? "sat" : "sats";
+}
+
 export function badgeTitle(state: TabPrice): string {
   const n = state.amountSats;
-  if (state.paid) return `Paid ${n} sats to open this page.`;
-  if (state.needsConfirm) return `This page costs ${n} sats to open. Confirm in the popup.`;
-  return `This page costs ${n} sats to open.`;
+  const unit = satWord(n);
+  if (state.paid) return `Paid ${n} ${unit} to open this page.`;
+  if (state.needsConfirm) return `This page costs ${n} ${unit} to open. Confirm in the popup.`;
+  return `This page costs ${n} ${unit} to open.`;
 }
 
 export async function applyTabBadge(tabId: number, state: TabPrice | undefined): Promise<void> {

@@ -29,11 +29,14 @@ var page = template.Must(template.New("402").Parse(`<!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{{with .Preview}}{{with .Title}}{{.}} · {{end}}{{end}}402 Payment Required · Spikes402</title>
+<link rel="icon" href="{{.Favicon}}" type="image/svg+xml">
 {{with .Preview}}{{with .Description}}<meta name="description" content="{{.}}">
 {{end}}{{end}}{{.LD}}
 <style>
  body{font-family:system-ui,sans-serif;max-width:36rem;margin:1.5rem auto;padding:0 1rem;color:#222;line-height:1.35}
- h1{font-size:1.9rem;margin:.2rem 0 .6rem}
+ h1{display:flex;align-items:center;gap:.45rem;font-size:1.9rem;margin:.2rem 0 .6rem}
+ h1 .logo{width:1.5em;height:1.5em;flex:none}
+ h1 a.logo-link{color:inherit;text-decoration:none;display:flex;flex:none}
  h2{font-size:1.05rem;margin:.15rem 0 .3rem}
  p{margin:.3rem 0}
  code{word-break:break-all;background:#f3f3f3;padding:.15rem .3rem;border-radius:4px;font-size:.8rem}
@@ -61,7 +64,7 @@ var page = template.Must(template.New("402").Parse(`<!doctype html>
 </style>
 </head>
 <body>
-<h1 id="pw-title">{{if .Auto}}One moment{{else if .Solve}}Pay or PoW{{else}}Payment required{{end}}</h1>
+<h1>{{.Logo}}<span id="pw-title">{{if .Auto}}One moment{{else if .Solve}}Pay or PoW{{else}}Payment required{{end}}</span></h1>
 <p id="pw-intro"{{if not .Auto}} hidden{{end}}>This page is protected against mass crawlers. Your browser does a short proof-of-work, then the page opens by itself.</p>
 {{with .Preview}}<article>
 {{with .Title}}<h2>{{.}}</h2>
@@ -80,8 +83,8 @@ var page = template.Must(template.New("402").Parse(`<!doctype html>
 <p class="pw-note" id="pw-note-sha" hidden>Your browser computes double SHA-256 hashes, like Bitcoin. The work only shows you are not a mass crawler, then it is thrown away.</p>
 </div>
 </div>
-{{end}}<details id="pay"{{if not .Auto}} open{{end}}><summary{{if not .Auto}} hidden{{end}}>Pay {{.PriceSats}} sats with Lightning instead</summary>
-<p>This page costs <strong>{{.PriceSats}} sats</strong>.</p>
+{{end}}<details id="pay"{{if not .Auto}} open{{end}}><summary{{if not .Auto}} hidden{{end}}>Pay {{.PriceSats}} {{.SatUnit}} with Lightning instead</summary>
+<p>This page costs <strong>{{.PriceSats}} {{.SatUnit}}</strong>.</p>
 {{with .L402}}
 <p>Pay this Lightning invoice with any wallet, or in one click with the <a href="https://github.com/Choffolo/spikes402#browser-wallet-extension-prototype">Spikes402 extension</a>:</p>
 <a href="lightning:{{.Invoice}}"><img src="{{$.QR}}" alt="QR code of the Lightning invoice" width="256" height="256"></a>
@@ -156,9 +159,19 @@ var (
 	invoiceJS string
 	//go:embed assets/pow-worker.js
 	powWorkerJS string
+	//go:embed assets/logo.svg
+	logoSVG string
 
 	wallHash    = base64.StdEncoding.EncodeToString(sha256Sum([]byte(wallJS)))
 	invoiceHash = base64.StdEncoding.EncodeToString(sha256Sum([]byte(invoiceJS)))
+
+	// logoInline sits next to the wall title; logoFavicon is a data URI
+	// so the icon needs no extra CSP source (img-src already allows data:).
+	logoInline  = template.HTML(inlineLogo(logoSVG))
+	logoFavicon = template.URL("data:image/svg+xml;base64," + base64.StdEncoding.EncodeToString([]byte(logoSVG)))
+	// logoHome wraps the mark in a link to the site root. The proxy is
+	// self-hosted, so this must be "/", not a hard-coded external URL.
+	logoHome = template.HTML(`<a href="/" class="logo-link" aria-label="Back to the site">` + string(logoInline) + `</a>`)
 
 	// workerSrc carries a content hash so a new release is never served
 	// from an old cached copy.
@@ -236,6 +249,28 @@ func sha256Sum(b []byte) []byte {
 	return s[:]
 }
 
+// inlineLogo turns the standalone SVG file into a decorative inline mark
+// (no XML declaration, no accessible name — the heading already has the title).
+func inlineLogo(s string) string {
+	s = strings.TrimSpace(s)
+	if strings.HasPrefix(s, "<?xml") {
+		if i := strings.Index(s, "?>"); i >= 0 {
+			s = strings.TrimSpace(s[i+2:])
+		}
+	}
+	s = strings.Replace(s, ` role="img"`, "", 1)
+	s = strings.Replace(s, ` aria-label="Spikes402"`, ` class="logo" aria-hidden="true"`, 1)
+	return s
+}
+
+// satUnit is "sat" for a price of 1, and "sats" otherwise.
+func satUnit(n int64) string {
+	if n == 1 {
+		return "sat"
+	}
+	return "sats"
+}
+
 // invoiceQR is a data URI of the Lightning invoice as a QR code.
 // Wallets expect upper-case BOLT11 in QR codes (smaller code).
 func invoiceQR(invoice string) template.URL {
@@ -252,6 +287,9 @@ func writeHTML(w io.Writer, b challengeBody, qr template.URL, mode string) {
 		QR        template.URL
 		Script    template.HTML
 		LD        template.HTML
+		Logo      template.HTML
+		Favicon   template.URL
+		SatUnit   string
 		Solve     bool   // the browser can solve this puzzle (browser_pow on, not Argon2id)
 		Auto      bool   // the puzzle starts at once (browser_pow "auto")
 		Mode      string // browser_pow: "button" or "auto"
@@ -259,7 +297,7 @@ func writeHTML(w io.Writer, b challengeBody, qr template.URL, mode string) {
 		Tiles     template.HTML
 		WorkerSrc string
 		Claim     string
-	}{challengeBody: b, QR: qr, LD: ldJSON(b.Preview), WorkerSrc: workerSrc, Claim: ClaimPath, Tiles: pwTiles}
+	}{challengeBody: b, QR: qr, LD: ldJSON(b.Preview), Logo: logoHome, Favicon: logoFavicon, SatUnit: satUnit(b.PriceSats), WorkerSrc: workerSrc, Claim: ClaimPath, Tiles: pwTiles}
 	var scripts string
 	if mode == "" {
 		mode = BrowserPoWButton
