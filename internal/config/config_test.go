@@ -3,8 +3,10 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 func load(t *testing.T, json string) (*Config, error) {
@@ -21,9 +23,28 @@ func TestExampleConfigLoads(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Listen != "127.0.0.1:8402" || c.PowSecondsPerSat != 10 || c.PoW(c.PriceSats).Difficulty != 24 || c.ChallengeTTLSeconds != 600 ||
+	if c.Listen != "127.0.0.1:8402" || c.PowSecondsPerSat != 10 || c.PoW(c.PriceSats).Difficulty != 24 || c.ChallengeTTLSeconds != 600 || c.PassTTL() != 10*time.Second ||
 		c.ChallengesPerMinute != 30 || c.MaxInvoicesPerMinute != 300 || c.MaxPendingInvoices != 10_000 || c.ClientIPHeader != "" {
 		t.Fatalf("unexpected defaults: %+v", c)
+	}
+}
+
+func TestPassTTLConfig(t *testing.T) {
+	base := `{"origin":"http://o","price_sats":5,"protect":["/x/**"],"lightning":{"backend":"fake"}}`
+	c, err := load(t, base)
+	if err != nil || c.PassTTL() != 10*time.Second || c.Public().PassTTLSeconds != 10 {
+		t.Fatalf("omitted: ttl=%v public=%d err=%v", c.PassTTL(), c.Public().PassTTLSeconds, err)
+	}
+	for _, n := range []int{0, 10, 60} {
+		c, err := load(t, `{"origin":"http://o","price_sats":5,"protect":["/x/**"],"pass_ttl_seconds":`+strconv.Itoa(n)+`,"lightning":{"backend":"fake"}}`)
+		if err != nil || c.PassTTL() != time.Duration(n)*time.Second || c.Public().PassTTLSeconds != n {
+			t.Fatalf("%d: ttl=%v public=%d err=%v", n, c.PassTTL(), c.Public().PassTTLSeconds, err)
+		}
+	}
+	for _, n := range []int{-1, 61} {
+		if _, err := load(t, `{"origin":"http://o","price_sats":5,"protect":["/x/**"],"pass_ttl_seconds":`+strconv.Itoa(n)+`,"lightning":{"backend":"fake"}}`); err == nil || !strings.Contains(err.Error(), "pass_ttl_seconds") {
+			t.Fatalf("%d: want pass_ttl_seconds error, got %v", n, err)
+		}
 	}
 }
 
@@ -65,6 +86,7 @@ func TestInvalid(t *testing.T) {
 		"bad proxy":           `{"origin":"http://o","price_sats":5,"protect":["/x"],"trusted_proxies":["nope"],"lightning":{"backend":"fake"}}`,
 		"phoenixd no pw":      `{"origin":"http://o","price_sats":5,"protect":["/x"],"secret_key":"` + strings.Repeat("k", 32) + `","lightning":{"backend":"phoenixd"}}`,
 		"bad algorithm":       `{"origin":"http://o","price_sats":5,"protect":["/x"],"pow_algorithm":"scrypt","lightning":{"backend":"fake"}}`,
+		"bad browser_pow":     `{"origin":"http://o","price_sats":5,"protect":["/x"],"browser_pow":{"mode":"always"},"lightning":{"backend":"fake"}}`,
 		"argon memory bomb":   `{"origin":"http://o","price_sats":5,"protect":["/x"],"pow_algorithm":"argon2id","argon2_memory_mib":4096,"lightning":{"backend":"fake"}}`,
 		"argon too little":    `{"origin":"http://o","price_sats":5,"protect":["/x"],"pow_algorithm":"argon2id","argon2_memory_mib":1,"lightning":{"backend":"fake"}}`,
 		"argon too hard":      `{"origin":"http://o","price_sats":5,"protect":["/x"],"pow_algorithm":"argon2id","pow_difficulty":30,"lightning":{"backend":"fake"}}`,

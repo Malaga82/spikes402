@@ -1,4 +1,4 @@
-# Spikes402 — Pay or PoW
+# <img src="assets/logo.svg" alt="Spikes402" width="40" height="40"> Spikes402 — Pay or PoW
 
 **Spikes402** is a small reverse proxy you put in front of a website. On the
 paths you choose, AI bots and crawlers must either **pay** a few sats over
@@ -6,10 +6,13 @@ the Bitcoin Lightning Network ([L402](https://github.com/lightninglabs/L402))
 or **do some work** (a proof-of-work puzzle, like Bitcoin mining in
 miniature). Everything else passes through untouched.
 
+Project page with a 25-second demo video: **https://malaga82.github.io/spikes402/**
+
 > **Status: experimental.** This is a first prototype. Do not use it with
 > real money on mainnet before an independent review.
 
-- One request = one payment. No accounts, no subscriptions, no time passes.
+- One request = one payment. Short access only, chosen by the site operator
+  (0-60 second pass, default 10 seconds); never accounts or subscriptions.
 - Non-custodial: payments go to *your own* Lightning node. Spikes402 never
   holds anyone's keys or funds.
 - A single Go binary, two small dependencies (QR codes and `golang.org/x/crypto`
@@ -21,6 +24,8 @@ miniature). Everything else passes through untouched.
 - Optional [admin dashboard](#admin-dashboard) with a live **siege monitor**,
   an [MCP server](#ai-admin-mcp) for an AI assistant, and optional
   [withdrawals](#withdrawals-optional-off-by-default) to one fixed address.
+
+**Protect a site in about five minutes:** the [Docker quickstart](docs/quickstart.md) (proof-of-work only, no Lightning node). The [local Go quick start](#quick-start-fake-lightning-no-real-money) is further down.
 
 ## How it works
 
@@ -55,9 +60,10 @@ website sets.
    with the invoice already shown (no second invoice). If the payment fits
    the wallet's budget, that can succeed without a further click. After
    paying, the page swaps the proof for a **pass**: a cookie (HttpOnly,
-   SameSite=Strict, one page, 60 seconds) and then loads the page for real, so
+   SameSite=Strict, one page, `pass_ttl_seconds` long, default 10, at most
+   60; 0 means no pass) and then loads the page for real, so
    its CSS, images and scripts work, files download normally, and a reload
-   within a minute does not pay again. The same page also shows an **Open in
+   within that lifetime does not pay again. The same page also shows an **Open in
    wallet** link (`lightning:`) and, after you pay with any Lightning wallet
    (a phone scanning the QR code, for example), unlocks on its own: it asks
    `/.spikes402/claim` every 1.5 seconds whether that invoice is paid, then
@@ -120,9 +126,15 @@ A JSON file (see [`config.example.json`](config.example.json)):
 | `pow_seconds_per_sat` | How much work replaces one sat: seconds of one CPU core (see [Proof-of-work pricing](#proof-of-work-pricing)). Values below 1 are refused unless `unsafe_allow_dangerous_config` is set | `10` |
 | `pow_difficulty` | Leading zero bits for the puzzle. `0` = derive from the price and `pow_seconds_per_sat` | `0` |
 | `pow_algorithm` | `"sha256d"` or `"argon2id"` (memory-hard, see [Argon2id](#argon2id-memory-hard-proof-of-work)) | `"sha256d"` |
+| `browser_pow.mode` | How the [402 page](#the-402-page-for-people) offers the proof-of-work to people: `"button"` (invoice first, "No sats? Do the challenge instead"), `"auto"` (the challenge starts at once) or `"off"` (invoice only) | `"button"` |
+| `lottery.pool` | Solo pool (stratum v1) that turns sha256d work into Bitcoin lottery tickets, `"host:port"` or `"tls://host:port"`. See [Bitcoin lottery](#bitcoin-lottery) | off |
+| `lottery.address` | With `lottery.pool`: the Bitcoin address the pool pays a block to (public, shown on the dashboard) | required with a pool |
+| `lottery.worker` | Optional worker name, sent as `address.worker` | `""` |
+| `lottery.password` | Pool password, usually ignored | `"x"` |
 | `argon2_memory_mib` | Memory per Argon2id attempt, 8–256 MiB | `16` |
 | `argon2_max_memory_mib` | Memory all concurrent Argon2id checks may use together. A check that needs more than this is refused at startup. Extra checks wait briefly, then `503` | `256` |
 | `challenge_ttl_seconds` | How long a 402 offer (token and invoice) stays valid | `600` |
+| `pass_ttl_seconds` | How long the post-unlock access pass lasts (0-60). `0` means every request needs a fresh payment or proof-of-work | `10` |
 | `challenges_per_minute` | 402 answers per client per minute; beyond that, `429 Too Many Requests` | `30` |
 | `max_invoices_per_minute` | Invoices created per minute, all clients together; beyond that, proof-of-work only | `300` |
 | `max_pending_invoices` | Open (unpaid, unexpired) invoices at once; beyond that, proof-of-work only | `10000` |
@@ -334,27 +346,49 @@ it needs ~256 MiB per verifier and a C library. Not implemented.
 
 ## The 402 page (for people)
 
-A browser (a request that accepts `text/html`) gets a page instead of JSON:
-"This page is protected by an invisible energy wall built with Bitcoin. Pay a
-few sats with the Spikes402 extension, or solve a math puzzle with your
-computer's power." It shows the Lightning invoice (QR code, an **Open in wallet** link for a
-phone or desktop wallet, and a one-click button if a WebLN wallet is present)
-and a **Solve the puzzle** button. After you pay with any wallet the page
-shows "Waiting for payment…", then "Paid — unlocking", and reloads into the
+A browser (a request that accepts `text/html`) gets a page instead of JSON.
+By default it is **Pay or PoW**: the Lightning invoice first, with a
+**No sats? Do the challenge instead** button below it.
+
+<img src="docs/pay-or-pow.png" alt="Pay or PoW: the Lightning invoice and the challenge button" width="420"> <img src="docs/pay-or-pow-lottery.png" alt="One moment: the browser works on a Bitcoin block header" width="420">
+
+**Paying.** The invoice comes as a QR code, an **Open in wallet** link
+(`lightning:`) for a phone or desktop wallet, and a one-click button if a
+WebLN wallet is present. After you pay with any wallet the page shows
+"Waiting for payment…", then "Paid — unlocking", and reloads into the
 content. It learns that the invoice is paid by polling `/.spikes402/claim`
 (see below); the preimage never has to be typed in.
 
-The button runs the same sha256d puzzle as bots do, in Web Workers (one per
-core, at most 8), and shows the work: a progress bar against the expected
-number of attempts, attempts so far, hashes per second, elapsed time. When
-a worker finds the nonce, the page redeems it exactly like a bot would
-(`Authorization: PoW token:nonce`) and reloads into the content. Nothing is
-loaded from outside; the page's Content-Security-Policy allows only hashed
-inline scripts, `connect-src 'self'` (for the claim polls and the redeem
-request) and workers from the proxy itself (`worker-src 'self'`). The
-worker and the claim endpoint live under `/.spikes402/`; that prefix is
-reserved and never reaches your website. With `argon2id` the button is
-hidden (the browser solver is sha256d only); bots and the extension work as before.
+**The challenge.** The button turns the page into **One moment** (right):
+the browser runs the same sha256d puzzle as bots do, in Web Workers (one
+per core, at most 8), and shows the work: a grid that fills up against the
+expected number of attempts, hashes per second, hashes so far and the best
+hash found, its leading zeros in orange. With the [Bitcoin
+lottery](#bitcoin-lottery) on, the puzzle is a real block header and the
+page says so. The invoice folds into **Pay N sats with Lightning instead**;
+opening it pauses the work, closing it starts again. When a worker finds the
+nonce, the page redeems it exactly like a bot would (`Authorization: PoW
+token:nonce`) and reloads into the content.
+
+Choose how the page offers the challenge with `browser_pow`:
+
+```json
+"browser_pow": { "mode": "button" }
+```
+
+- `"button"` (default): Pay or PoW, as above;
+- `"auto"`: the page opens directly on One moment and starts the work at
+  once; paying is one click away;
+- `"off"`: the invoice only, no challenge for people (bots still get the
+  proof-of-work offer in the headers).
+
+Nothing is loaded from outside; the page's Content-Security-Policy allows
+only hashed inline scripts, `connect-src 'self'` (for the claim polls and
+the redeem request) and workers from the proxy itself (`worker-src 'self'`).
+The worker and the claim endpoint live under `/.spikes402/`; that prefix is
+reserved and never reaches your website. With `argon2id` the challenge is
+not offered (the browser solver is sha256d only); bots and the extension
+work as before.
 
 **Difficulty.** The page uses the same difficulty as everyone. A lower
 "interactive" difficulty would only be safe if the server could tell people
@@ -402,6 +436,55 @@ verified Googlebot (Google's own paywall model, which is not cloaking when the
 page carries the paywall markup), or leaving that page unprotected. Serving the teaser
 with status 200 to everyone would be indexable, but changes what a 402 means
 for bots; it is not implemented.
+
+### Bitcoin lottery
+
+With `lottery` set, the gate connects to a **solo pool** as a miner
+(stratum v1) and every sha256d proof of work is also done on a **real
+Bitcoin block header**: the same double SHA-256, the same cost, but a hash
+good enough for the network would be a whole block, paid by the pool to
+your address. Nothing else changes for the site.
+
+```json
+"lottery": { "pool": "solo.ckpool.org:3333", "address": "bc1q...", "worker": "mysite" }
+```
+
+- Each 402 keeps its ordinary puzzle first and adds a second PoW challenge,
+  `algorithm="bitcoin"`, with its own token and a 76-byte `header` (block
+  header without its nonce, with an extranonce of its own). The answer is a
+  32-bit nonce such that `SHA256(SHA256(header + nonce as 4 little-endian
+  bytes))`, read as a little-endian number the way Bitcoin shows hashes,
+  has `difficulty` leading zero bits. Clients that do not know it keep
+  solving the ordinary puzzle; the Go client and `spikes-bot` prefer the
+  lottery when it is within their limits.
+- The difficulty is the ordinary puzzle's (one header hash costs about the
+  same), at most 30 bits so the nonce cannot run out; beyond that, or with
+  `argon2id`, or before the first job arrives, there is no lottery.
+- The gate checks an answer with a few SHA-256 runs, like the ordinary
+  puzzle. An answer that also clears the pool's share target is sent to the
+  pool (`mining.submit`); one that clears the network target is a block.
+- People play too: the [402 page](#the-402-page-for-people) challenge runs on
+  the lottery header when there is one ("Bitcoin block header" and the best
+  hash on the page), and falls back to the ordinary puzzle if the pool job
+  has expired.
+- The dashboard's [Stats](#stats) page has a **Bitcoin lottery** panel:
+  hashes played, best hash, chance of a block so far, shares accepted,
+  blocks found, pool, payout address and the block being mined.
+- **The odds:** the network does about 10^21 hashes a second. A visit that
+  takes a browser 2 seconds is ~2 million hashes, a chance of about 3·10^-18
+  of a block. It is a lottery, honestly labelled, not income; the dashboard
+  shows the hashes played, the best hash and the chance so far.
+- Pools: any solo pool that speaks stratum v1 with your address as user
+  name, e.g. solo.ckpool.org or public-pool.io (they take a small fee on a
+  block). The header assembly is tested against a real mainnet block, and
+  the job parsing against live jobs of both pools.
+- **Prefer `tls://` when the pool offers it.** Stratum v1 is plain text:
+  anyone on the path can rewrite the `mining.authorize` that carries your
+  payout address, or feed fake jobs (then only the lottery suffers; the
+  gate falls back to the ordinary puzzle). Spikes402 caps what a pool may
+  send (32 merkle levels and an 8 KiB coinbase). The client ignores share
+  difficulties below `1e-9`. A low difficulty above that floor can still
+  qualify every solved challenge as a share.
 
 ## Bot identification
 
@@ -572,8 +655,9 @@ The key is compared in constant time, kept only in the browser tab
 to steal or forge. The page is plain HTML/JS embedded in the binary, with a
 strict Content-Security-Policy and no outside resources.
 
-It is **one page**: the siege monitor (below), four numbers and a small
+The main page is the siege monitor (below), four numbers and a small
 Lightning light (green = fine, red = a problem; hover it for details).
+**Stats** (below) shows who visits, page by page and client by client.
 Everything else sits behind the discreet **Settings** link:
 
 - the few **webmaster settings** that can change while running: `price_sats`,
@@ -591,7 +675,11 @@ Everything else sits behind the discreet **Settings** link:
   (values are not secrets). A leftover `config.overrides.json` next to
   the config file is still read if the `state_dir` copy is not there yet;
   the next dashboard save writes to `state_dir`. Delete the overrides
-  file if you want the config file values back. Everything about money or
+  file if you want the config file values back. The last settings a
+  person applied are also kept under `state_dir` as
+  `config.confirmed.json`, so the AI cannot reach those confirmation
+  limits through many small steps; delete that file too if you want that
+  baseline reset. Everything about money or
   the perimeter stays in the config file on purpose: passwords and keys,
   the Lightning node, the withdraw destination, node anti-flood limits
   (`max_invoices_per_minute`, `max_pending_invoices`), surge pricing,
@@ -609,8 +697,9 @@ Everything else sits behind the discreet **Settings** link:
   warning, in the dashboard. So does anything that could take the site
   down even though it looks stricter: a whole-site `protect` pattern
   (`/`, `/**`), making verified crawlers or signed agents pay or be
-  blocked, a price more than doubling (or above 1000 sats), or cutting
-  `challenges_per_minute` by more than half. Those proposals are marked in
+  blocked, a price more than doubling from the last settings a person
+  applied (or above 1000 sats), or cutting `challenges_per_minute` by
+  more than half from those same settings. Those proposals are marked in
   the dashboard and the API only applies them with an explicit
   confirmation (`POST /api/proposals/{id}/approve?confirm=1`). A collapsed list shows all current settings
   (no secrets) and node details;
@@ -641,6 +730,44 @@ a keyed hash that changes on every restart (`v-3fa2c1d9e07b`), no query
 strings. Use `"admin.visitor_ips": "truncate"` for networks
 (`203.0.113.0/24`) or `"full"` for addresses. The animation respects
 "reduce motion".
+
+### Stats
+
+![Stats](docs/stats.png)
+
+Traffic over the last 24 hours, 7 or 30 days, with the
+[Bitcoin lottery](#bitcoin-lottery) panel when the lottery is on:
+
+- **numbers**: requests, page views (people and bots), `402` answers, the
+  share unlocked after a `402`, sats earned, the average time from `402` to
+  a valid proof, time on page and origin response time;
+- **charts** per hour (per day for 30 days): challenges (paid, work, not
+  unlocked, repelled) and page views (people, bots);
+- **who visits**: people, verified bots, bots and scripts, impostors;
+- **pages**: views, `402`s, unlocks, sats, time to unlock, time on page,
+  response time and distinct visitors per path (no query strings);
+- **Bitcoin lottery** (when on): hashes played, best hash, chance of a
+  block so far, shares and blocks, pool and payout address;
+- **clients**: one row per visitor and User-Agent, with kind, a short agent
+  name (`Chrome · Windows`, `GPTBot`, `HeadlessChrome`), requests, unlocks,
+  sats and last page. Filter by kind, search by visitor, agent or path.
+
+A visitor is a **person** when a browser sends a language and asks for HTML
+or returns the session cookie; a **bot** when its User-Agent says so (or it
+sends none, or it is a headless browser); verified bots and impostors come
+from the bot check. **Time on page** is estimated without any JavaScript on
+your site: the gap between two pages of the same person within 30 minutes
+(the last page of a visit has none). Page views count HTML pages the origin
+delivered, including unprotected ones, which only feed these statistics.
+
+Visitors appear as `admin.visitor_ips` says (with `"hash"` the keys change on
+restart, so the same visitor becomes a new row). Everything is aggregated as
+requests arrive and bounded (30 days of hours, 2,000 paths, 5,000 clients).
+It is saved every 30 seconds while it changes, atomically and with mode
+`0600`, in `state_dir` (`config.stats.json` for `config.json`). The first
+start can load an existing statistics file from next to the config.
+`GET /api/stats?range=24h|7d|30d&kind=` returns the
+same data as JSON, for the admin and the AI key.
 
 ## AI admin (MCP)
 
@@ -768,8 +895,9 @@ resp, err := c.Get(ctx, "https://example.com/premium/article")
 ```
 
 Paying needs a `client.Payer` (your wallet). Only a fake payer exists so far.
-The client solves both `sha256d` and `argon2id` puzzles and refuses ones
-that are too hard (`MaxDifficulty`, `MaxArgonDifficulty`, `MaxArgonMemoryMiB`).
+The client solves `sha256d`, `argon2id` and the [Bitcoin lottery](#bitcoin-lottery)
+puzzles and refuses ones that are too hard (`MaxDifficulty`,
+`MaxArgonDifficulty`, `MaxArgonMemoryMiB`).
 
 **Waiting for an external payment.** If you pay the invoice with a wallet
 that does not give you the preimage in the same process, poll the claim
@@ -784,7 +912,7 @@ A 202 body `{"status":"unpaid"}` means not yet (honour `Retry-After`, about 2
 seconds). A 200 body `{"status":"paid","preimage":"<hex>"}` is the preimage;
 redeem the page as usual with `Authorization: L402 <token>:<preimage>`. The
 same token is also accepted with `Spikes402-Redeem: cookie` on a POST to the
-claim path: the response is 204 and a 60-second pass cookie for that
+claim path: the response is 204 and a pass cookie (`pass_ttl_seconds`, default 10) for that
 resource, so a browser can reload the page without handling the preimage.
 A 410 means the offer expired; a 401 means the token was missing or not
 ours. Only the holder of the HMAC-signed token can claim; knowing the
@@ -910,6 +1038,9 @@ mainnet, use only tiny amounts. [Try it](docs/try-the-wallet.md); build
 notes are in [extension/README.md](extension/README.md).
 
 ## Inspirations and thank you
+
+The proof-of-work in the browser follows [PoWned](https://github.com/gobrrrme/PoWned)
+by GoBrrr.
 
 Spikes402 is dedicated to the books and thinkers that shaped it:
 

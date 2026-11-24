@@ -1,6 +1,7 @@
 import { pickPositions, type QuizAnswer } from "../backup";
 import { isValidMnemonic, normalizeMnemonic } from "../crypto";
 import type { PaymentRecord, PendingPayment, Settings, WalletInfo } from "../types";
+import { satWord } from "../badge";
 import { historyRow } from "./format";
 import { invoiceQrSvg } from "./qr";
 
@@ -133,7 +134,7 @@ function render(snap: Snapshot, full: boolean) {
     pendingBox.hidden = false;
     const fee = pending.costSats - pending.amountSats;
     const more = pendingCount > 1 ? ` (${pendingCount - 1} more waiting)` : "";
-    $("pending-text").textContent = `This page costs ${pending.amountSats} sats + a fee of up to ${fee} sats. ${pending.reason}${more}`;
+    $("pending-text").textContent = `This page costs ${pending.amountSats} ${satWord(pending.amountSats)} + a fee of up to ${fee} ${satWord(fee)}. ${pending.reason}${more}`;
     $("pending-origin").textContent = pending.origin;
     pendingBox.dataset.id = pending.id;
   } else {

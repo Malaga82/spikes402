@@ -8,11 +8,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"log"
 	"maps"
 	"net"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -22,6 +24,7 @@ import (
 	"github.com/Choffolo/spikes402/internal/config"
 	"github.com/Choffolo/spikes402/internal/gate"
 	"github.com/Choffolo/spikes402/internal/lightning"
+	"github.com/Choffolo/spikes402/internal/siegeart"
 )
 
 //go:embed web
@@ -32,7 +35,8 @@ type Role string
 
 // Roles. The AI may read and propose changes; it may apply them only if
 // "admin.ai_can_apply" is set, and only when the change does not reduce
-// protection. It can never withdraw or approve proposals.
+// protection or need confirmation against the last settings a person
+// applied. It can never withdraw or approve proposals.
 const (
 	RoleAdmin Role = "admin"
 	RoleAI    Role = "ai"
@@ -63,9 +67,11 @@ type Server struct {
 	started    time.Time
 	now        func() time.Time
 
-	mu         sync.Mutex // guards cfg and changes to the gate's settings
-	cfg        *config.Config
-	configFile string
+	mu          sync.Mutex // guards cfg, baseline, and changes to the gate's settings
+	cfg         *config.Config
+	configFile  string
+	baseline    *config.Config // last settings a person applied; AI drift is measured against this
+	baselineErr error          // set if the confirmed file exists but could not be read
 
 	nodeMu    sync.Mutex
 	nodeAt    time.Time
@@ -93,7 +99,52 @@ func New(o Options) *Server {
 		s.wd = newWithdrawals(o.Config.Withdraw.Destination, o.Config.Withdraw.Password, o.IntentStore)
 		s.loadIntent()
 	}
+	s.initBaseline()
 	return s
+}
+
+// initBaseline loads the last human-applied settings, or records the
+// current config as that baseline when the file is not there yet.
+func (s *Server) initBaseline() {
+	s.baseline = s.cfg
+	path := s.cfg.ConfirmedFile()
+	if path == "" {
+		return
+	}
+	b, err := config.ReadSnapshotFile(path, s.cfg)
+	if err == nil {
+		s.baseline = b
+		return
+	}
+	if !os.IsNotExist(err) {
+		s.baselineErr = err
+		log.Printf("admin: could not read confirmed settings from %s: %v (AI apply is blocked until a human saves settings)", path, err)
+		return
+	}
+	if err := config.WriteOverrides(path, s.cfg); err != nil {
+		log.Printf("admin: could not save confirmed settings to %s: %v", path, err)
+	}
+}
+
+// rememberConfirmed records n as the last settings a person applied.
+// Called under s.mu after a successful human apply.
+func (s *Server) rememberConfirmed(n *config.Config) {
+	s.baseline = n
+	s.baselineErr = nil
+	if path := n.ConfirmedFile(); path != "" {
+		if err := config.WriteOverrides(path, n); err != nil {
+			log.Printf("admin: settings applied but confirmed baseline not saved to %s: %v", path, err)
+		}
+	}
+}
+
+// ReloadConfig replaces the server's in-memory config after a SIGHUP reload.
+func (s *Server) ReloadConfig(cfg *config.Config) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.cfg = cfg
+	s.baseline = cfg
+	s.baselineErr = nil
 }
 
 // Handler returns the HTTP handler: the dashboard at "/" and the API at "/api/".
@@ -104,10 +155,15 @@ func (s *Server) Handler() http.Handler {
 	for _, p := range []string{"GET /{$}", "GET /app.js", "GET /style.css"} {
 		mux.Handle(p, files)
 	}
+	mux.HandleFunc("GET /siege-art.js", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
+		io.WriteString(w, siegeart.JS)
+	})
 
 	mux.HandleFunc("GET /api/whoami", s.api(false, s.whoami))
 	mux.HandleFunc("GET /api/status", s.api(false, s.status))
 	mux.HandleFunc("GET /api/siege", s.api(false, s.siege))
+	mux.HandleFunc("GET /api/stats", s.api(false, s.stats))
 	mux.HandleFunc("GET /api/settings", s.api(false, s.getSettings))
 	mux.HandleFunc("PUT /api/settings", s.api(false, s.putSettings))
 	mux.HandleFunc("GET /api/proposals", s.api(false, s.listProposals))
@@ -276,6 +332,13 @@ func (s *Server) status(_ http.ResponseWriter, _ *http.Request, role Role) (any,
 	}, nil
 }
 
+func (s *Server) stats(_ http.ResponseWriter, r *http.Request, _ Role) (any, error) {
+	return struct {
+		Report
+		Lottery any `json:"lottery,omitempty"` // the Bitcoin lottery's counters, if it is on
+	}{s.mon.Stats(r.URL.Query().Get("range"), r.URL.Query().Get("kind"), s.now()), s.gate.Status().Lottery}, nil
+}
+
 // nodeStatus asks the node at most every 10 seconds, with a short timeout.
 func (s *Server) nodeStatus() (*lightning.NodeInfo, string) {
 	if s.node == nil {
@@ -321,6 +384,9 @@ func (s *Server) putSettings(_ http.ResponseWriter, r *http.Request, role Role) 
 	if ch.Paused != nil && role != RoleAdmin {
 		return nil, fail(http.StatusForbidden, "only the human admin can toggle pause; the AI may propose it")
 	}
+	if ch.ObserveOnly != nil && role != RoleAdmin {
+		return nil, fail(http.StatusForbidden, "only the human admin can toggle observe_only; the AI may propose it")
+	}
 	return s.apply(ch, role)
 }
 
@@ -342,7 +408,14 @@ func (s *Server) apply(ch config.Changes, by Role) (config.Public, error) {
 		if why := config.WeakensProtection(s.cfg, n); len(why) > 0 {
 			return config.Public{}, fail(http.StatusForbidden, "this would reduce protection (%s); propose it for the human admin to approve", strings.Join(why, "; "))
 		}
-		if why := config.NeedsConfirmation(s.cfg, n); len(why) > 0 {
+		if s.baselineErr != nil {
+			return config.Public{}, fail(http.StatusForbidden, "confirmed settings could not be read; propose this for the human admin to approve")
+		}
+		base := s.baseline
+		if base == nil {
+			base = s.cfg
+		}
+		if why := config.NeedsConfirmation(base, n); len(why) > 0 {
 			return config.Public{}, fail(http.StatusForbidden, "this needs a human to confirm it (%s); propose it for the human admin to approve", strings.Join(why, "; "))
 		}
 	}
@@ -362,6 +435,9 @@ func (s *Server) apply(ch config.Changes, by Role) (config.Public, error) {
 		return config.Public{}, fail(http.StatusInternalServerError, "settings were saved but could not be applied: %v", err)
 	}
 	s.cfg = n
+	if by == RoleAdmin {
+		s.rememberConfirmed(n)
+	}
 	b, _ := json.Marshal(ch)
 	log.Printf("admin: settings changed by %s: %s (saved to %s)", by, b, path)
 	return n.Public(), nil
@@ -387,7 +463,7 @@ func mergeBotPolicies(current, incoming map[string]gate.Policy) map[string]gate.
 }
 
 // proposalOut is a proposal plus what a human should look at before
-// approving it, judged against the current settings.
+// approving it, judged against the last settings a person applied.
 type proposalOut struct {
 	Proposal
 	Risks []string `json:"risks,omitempty"`
@@ -395,12 +471,17 @@ type proposalOut struct {
 
 // risks lists why approving ch needs an explicit confirmation.
 func (s *Server) risks(ch config.Changes) []string {
-	cur := s.config()
+	s.mu.Lock()
+	cur, base, baseErr := s.cfg, s.baseline, s.baselineErr
+	s.mu.Unlock()
 	n, err := cur.Apply(ch)
 	if err != nil {
 		return nil
 	}
-	return config.NeedsConfirmation(cur, n)
+	if base == nil || baseErr != nil {
+		base = cur
+	}
+	return config.NeedsConfirmation(base, n)
 }
 
 func (s *Server) listProposals(_ http.ResponseWriter, _ *http.Request, _ Role) (any, error) {

@@ -31,7 +31,8 @@ type Bot struct {
 // DefaultBots are checked with the IP range lists their operators
 // publish, and reverse DNS where the operator documents it.
 var DefaultBots = []Bot{
-	{"Googlebot", "Googlebot", "https://developers.google.com/static/search/apis/ipranges/googlebot.json", []string{"googlebot.com", "google.com"}},
+	{"Googlebot", "Googlebot", "https://developers.google.com/crawling/ipranges/common-crawlers.json", []string{"googlebot.com"}},
+	{"AdsBot-Google", "AdsBot-Google", "https://developers.google.com/crawling/ipranges/special-crawlers.json", nil},
 	{"Bingbot", "bingbot", "https://www.bing.com/toolbox/bingbot.json", []string{"search.msn.com"}},
 	{"GPTBot", "GPTBot", "https://openai.com/gptbot.json", nil},
 	{"OAI-SearchBot", "OAI-SearchBot", "https://openai.com/searchbot.json", nil},
@@ -87,6 +88,7 @@ type Resolver interface {
 const (
 	dnsTimeout       = 1500 * time.Millisecond
 	dnsCacheTTL      = time.Hour
+	dnsErrorTTL      = time.Minute // a failed lookup is not repeated sooner (an attacker's DNS can fail on purpose)
 	maxDNSCache      = 10_000
 	maxDNSInFlight   = 16
 	maxNames         = 5 // PTR names checked per address
@@ -116,12 +118,14 @@ type Classifier struct {
 	ranges map[string][]netip.Prefix // bot name -> published ranges
 
 	dnsMu    sync.Mutex
-	dnsCache map[string]dnsResult // ip|bot -> result
+	dnsCache map[string]dnsResult     // ip|bot -> result
+	dnsWait  map[string]chan struct{} // ip|bot -> lookup in progress, closed when done
 	dnsSem   chan struct{}
 }
 
 type dnsResult struct {
 	ok      bool
+	err     error
 	expires time.Time
 }
 
@@ -135,6 +139,7 @@ func New(bots []Bot, sig *webbotauth.Verifier) *Classifier {
 		now:      time.Now,
 		ranges:   make(map[string][]netip.Prefix),
 		dnsCache: make(map[string]dnsResult),
+		dnsWait:  make(map[string]chan struct{}),
 		dnsSem:   make(chan struct{}, maxDNSInFlight),
 	}
 }
@@ -209,7 +214,10 @@ func (c *Classifier) check(b Bot, ip net.IP) (Kind, string, string) {
 				return Verified, "ip-list", ""
 			}
 		}
-		return Impostor, "ip-list", ""
+		// Try the operator's documented reverse-DNS check after a list miss.
+		if len(b.ReverseDNS) == 0 {
+			return Impostor, "ip-list", ""
+		}
 	}
 	if len(b.ReverseDNS) > 0 {
 		ok, err := c.reverseDNS(b, addr)
@@ -228,16 +236,43 @@ var errDNSBusy = errors.New("too many DNS checks in flight")
 
 // reverseDNS does forward-confirmed reverse DNS: the PTR name must end
 // in one of the bot's suffixes and resolve back to the same address.
+// Results are cached, failures for a short while, and concurrent requests
+// from the same address share one lookup.
 func (c *Classifier) reverseDNS(b Bot, addr netip.Addr) (bool, error) {
 	key := addr.String() + "|" + b.Name
-	now := c.now()
-	c.dnsMu.Lock()
-	if r, ok := c.dnsCache[key]; ok && now.Before(r.expires) {
+	for {
+		now := c.now()
+		c.dnsMu.Lock()
+		if r, ok := c.dnsCache[key]; ok && now.Before(r.expires) {
+			c.dnsMu.Unlock()
+			return r.ok, r.err
+		}
+		wait, running := c.dnsWait[key]
+		if !running {
+			done := make(chan struct{})
+			c.dnsWait[key] = done
+			c.dnsMu.Unlock()
+			ok, err := c.lookupDNS(b, addr)
+			c.dnsMu.Lock()
+			if err != errDNSBusy { // our own overload is not the address's fault
+				ttl := dnsCacheTTL
+				if err != nil {
+					ttl = dnsErrorTTL
+				}
+				c.cacheDNSLocked(key, dnsResult{ok: ok, err: err, expires: now.Add(ttl)}, now)
+			}
+			delete(c.dnsWait, key)
+			close(done)
+			c.dnsMu.Unlock()
+			return ok, err
+		}
 		c.dnsMu.Unlock()
-		return r.ok, nil
+		<-wait // then read what it found (or look up ourselves if it was too busy)
 	}
-	c.dnsMu.Unlock()
+}
 
+// lookupDNS does the lookups for reverseDNS, without the cache.
+func (c *Classifier) lookupDNS(b Bot, addr netip.Addr) (bool, error) {
 	select {
 	case c.dnsSem <- struct{}{}:
 		defer func() { <-c.dnsSem }()
@@ -265,6 +300,10 @@ func (c *Classifier) reverseDNS(b Bot, addr netip.Addr) (bool, error) {
 		}
 		ips, err := c.resolver.LookupIPAddr(ctx, name)
 		if err != nil {
+			var dnsErr *net.DNSError
+			if errors.As(err, &dnsErr) && dnsErr.IsNotFound {
+				continue // the name does not exist: it cannot confirm the address
+			}
 			return false, errors.New("forward DNS failed")
 		}
 		for _, a := range ips {
@@ -272,9 +311,15 @@ func (c *Classifier) reverseDNS(b Bot, addr netip.Addr) (bool, error) {
 				ok = true
 			}
 		}
+		if ok {
+			break // confirmed: a later name's failure must not undo it
+		}
 	}
 
-	c.dnsMu.Lock()
+	return ok, nil
+}
+
+func (c *Classifier) cacheDNSLocked(key string, r dnsResult, now time.Time) {
 	if len(c.dnsCache) >= maxDNSCache {
 		for k, r := range c.dnsCache {
 			if !now.Before(r.expires) {
@@ -285,9 +330,7 @@ func (c *Classifier) reverseDNS(b Bot, addr netip.Addr) (bool, error) {
 			clear(c.dnsCache) // bounded memory beats a perfect cache
 		}
 	}
-	c.dnsCache[key] = dnsResult{ok: ok, expires: now.Add(dnsCacheTTL)}
-	c.dnsMu.Unlock()
-	return ok, nil
+	c.dnsCache[key] = r
 }
 
 func hasSuffix(name string, suffixes []string) bool {

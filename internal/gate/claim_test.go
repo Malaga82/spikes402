@@ -306,3 +306,37 @@ func TestInvoiceCacheIsBounded(t *testing.T) {
 		t.Fatalf("expired entries were not swept: %d left", n)
 	}
 }
+
+// A payment seen through the claim endpoint is counted on the paid page
+// (named by the 402 page's Referer, believed only when it hashes to the
+// token's page), with its price.
+func TestClaimObservedOnThePaidPage(t *testing.T) {
+	for _, c := range []struct{ referer, want string }{
+		{"http://example.com/premium/article?x=1", "GET /premium/article?x=1"},
+		{"http://example.com/premium/other", "POST " + ClaimPath}, // not the token's page
+		{"", "POST " + ClaimPath},
+	} {
+		f := newFixture(t)
+		rec := &recorder{}
+		f.gate.opt.Observer = rec.observe
+		ch := f.challenge(t, "/premium/article?x=1")
+		if _, err := f.ln.Pay(ch.L402.Invoice); err != nil {
+			t.Fatal(err)
+		}
+		req := httptest.NewRequest(http.MethodPost, ClaimPath, nil)
+		req.Header.Set("Authorization", "Bearer "+ch.L402.Token)
+		req.Header.Set(RedeemHeader, redeemCookie)
+		if c.referer != "" {
+			req.Header.Set("Referer", c.referer)
+		}
+		w := httptest.NewRecorder()
+		f.gate.ServeHTTP(w, req)
+		if w.Code != http.StatusNoContent {
+			t.Fatalf("%q: claim %d", c.referer, w.Code)
+		}
+		e := rec.events[len(rec.events)-1]
+		if e.Outcome != OutcomePaid || e.Resource != c.want || e.Price != ch.PriceSats {
+			t.Errorf("%q: event %s %q price %d, want %q price %d", c.referer, e.Outcome, e.Resource, e.Price, c.want, ch.PriceSats)
+		}
+	}
+}

@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Spikes402 · Pay or PoW, with a Bitcoin lottery</title>
+<meta name="description" content="Spikes402 is an open-source reverse proxy: bots and scrapers pay a few sats over Lightning or do proof-of-work, and every proof is a ticket in a Bitcoin block lottery.">
+<meta name="theme-color" content="#0b0f1a">
+<meta property="og:title" content="Spikes402 · Pay or PoW">
+<meta property="og:description" content="Bots pay a few sats over Lightning or do proof-of-work. Every proof is a Bitcoin lottery ticket.">
+<meta property="og:image" content="assets/demo-poster.jpg">
+<link rel="icon" href="assets/logo.svg" type="image/svg+xml">
+<link rel="stylesheet" href="style.css">
+<script>try{var t=localStorage.getItem("theme");if(t)document.documentElement.dataset.theme=t}catch(e){}</script>
+</head>
+<body>
+<header class="top">
+  <div class="wrap">
+    <a class="brand" href="#"><svg class="logo" aria-hidden="true" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" fill="none" >
+  <path style="fill:var(--logo-ink)" fill-rule="evenodd" d="M95.75 124.12L79.37 105.25L79 105.01L75.38 105.49L72.75 105.5L69.88 105.24L65.88 104.38L65.5 104.51L54.88 122.12L54.88 121.12L52.12 99.38L51.87 98.63L47.25 95.49L43.62 92.37L40.51 89L37.5 85.17L19.93 85.45L30.74 71.5L29.26 66L28.51 61.12L28.38 54.5L28.62 52.25L11.75 36.12L31.75 38.24L32.34 38L33.72 35L35.66 31.88L37.51 29.5L39.91 27L34.88 3.12L51.5 21.41L54.62 21L59.12 21L64.88 21.86L75.38 4.75L78.26 28.99L80.25 30.38L83.5 33.12L86.99 36.75L90.38 40.95L107 40.5L110.32 40.55L98.29 56.5L99.74 62.25L100.37 65.75L100.75 69.38L100.76 72.75L119 90.12L99.75 88.01L98.5 87.89L98.16 88.12L97.41 90L95.59 93.38L93.24 96.62L90.68 99.38ZM52 33.38L55.25 33.38L56.38 33.52L58.62 33.92L61.75 34.88L63.25 35.47L66.25 36.97L68.25 38.21L70.88 40.14L74 42.88L76 45L77.45 46.75L79.58 49.62L81.08 52L82.34 54.25L83.4 56.38L84.83 59.88L85.83 63L86.36 65.25L86.86 68L87.12 70.5L87.13 72.12L87.25 73L87.12 76.12L86.73 79.25L86.08 82.25L85.2 84.88L84.22 87.12L83.37 88.62L81.61 91.12L80.25 92.62L79 93.7L77.25 94.95L75.12 96.08L74.5 96.25L73.25 96.25L71.25 95.98L68.5 95.33L65.88 94.45L64.25 93.78L61.38 92.33L59.12 90.95L56.12 88.73L54.25 87.12L51.63 84.5L50.14 82.75L47.92 79.88L46.17 77.25L44.6 74.5L43.6 72.5L41.92 68.5L40.55 64.25L39.89 61.5L39.39 58.75L39 54.75L39 51.25L39.27 48.25L39.64 46.12L40.3 43.5L41.05 41.25L42.1 38.75L43.8 35.8L45.12 35.1L47.25 34.3L49.88 33.64Z"/>
+  <path fill="#fff" d="M86.5 93.62L86.88 92.88L87.12 92.62L87.25 92.25L87.5 92L88.9 89.12L89.46 87.75L90.33 85L90.86 82.75L91.36 79.88L91.39 79L91.62 77.38L91.75 73.75L91.63 73L91.62 71.25L91.36 68.62L90.33 63.25L89.83 61.38L88.58 57.62L87.4 54.75L86.09 52L83.62 47.75L81.83 45.12L79.99 42.75L78.25 40.75L75.25 37.75L73.5 36.26L71.25 34.54L67.38 32.1L64.38 30.6L62.75 29.92L61.38 29.42L59 28.76L56.38 28.26L53.25 28L53.75 27.75L54.75 27.5L54.88 27.38L57.75 26.76L59.87 26.5L63.25 26.5L66 26.89L68.25 27.42L71.75 28.67L74.5 29.97L76.88 31.38L80.25 33.76L82.5 35.63L85.75 38.88L87.74 41.25L89.21 43.25L90.71 45.5L92.72 49L94.15 52L95.46 55.25L96.46 58.38L97.36 62.25L97.74 64.62L98 67.25L98 72.12L97.74 74.75L97.36 77L96.71 79.62L95.96 81.88L95.28 83.5L94.33 85.38L92.83 87.75L91.12 89.88L89 91.86L87.88 92.75L87.12 93.12Z"/>
+  <path fill="#F7931A" d="M67.88 40.38L63.88 59.38L77.12 59.62L57.5 86.38L60.88 67.88L47.88 67.88Z"/>
+</svg> Spikes402</a>
+    <nav>
+      <a href="#how">How it works</a>
+      <a href="#lottery">Lottery</a>
+      <a href="#dashboard">Dashboard</a>
+      <a href="#start">Get started</a>
+      <a class="gh" href="https://github.com/Malaga82/spikes402/tree/lottery">GitHub</a>
+    </nav>
+    <button id="theme" type="button" aria-label="Switch light or dark theme" title="Light / dark">◐</button>
+  </div>
+</header>
+
+<main>
+<section class="hero">
+  <div class="wrap grid">
+    <div>
+      <span class="eyebrow">⚡ Lightning · ⛏ PoW · 🎟 Bitcoin lottery</span>
+      <h1>Pay or PoW.<br><span class="accent">A friendly site with a spiked collar.</span></h1>
+      <p class="lead">Spikes402 is a small open-source reverse proxy in front of your website. On the paths you choose, AI bots and scrapers either <strong>pay a few sats</strong> over Lightning or <strong>do some work</strong>, and every proof of work is also a ticket in a <strong>real Bitcoin block lottery</strong>.</p>
+      <div class="cta">
+        <a class="btn primary" href="#start">Get started</a>
+        <a class="btn" href="https://github.com/Malaga82/spikes402/tree/lottery">View on GitHub</a>
+      </div>
+      <p class="meta">AGPLv3 · Go, single binary · Payments go straight to your own node</p>
+    </div>
+    <div>
+      <div class="video">
+        <video src="assets/demo.mp4" poster="assets/demo-poster.jpg" autoplay muted loop playsinline controls preload="metadata" aria-label="Demo: the Pay or PoW page, the lottery challenge in the browser, and the admin statistics"></video>
+      </div>
+      <p class="caption">25 seconds: the paywall, the lottery challenge in the browser, the page opening, the admin stats.</p>
+    </div>
+  </div>
+</section>
+
+<section id="how" class="alt">
+  <div class="wrap">
+    <span class="kicker">How it works</span>
+    <h2>Everything passes, except what you protect</h2>
+    <p class="sub">Spikes402 answers protected paths with HTTP <code>402 Payment Required</code> and two ways in. Everything else goes through untouched.</p>
+    <div class="steps">
+      <div class="card"><h3>A bot asks for a page</h3><p>On a protected path it gets a <code>402</code> with a Lightning invoice (L402) and a proof-of-work puzzle in the <code>WWW-Authenticate</code> headers.</p></div>
+      <div class="card"><h3>It pays or it works</h3><p>A few sats to your own node, or a sha256d puzzle sized to the price: seconds of CPU instead of free bulk crawling.</p></div>
+      <div class="card"><h3>The page opens</h3><p>The proof is checked locally in microseconds and spent once. People get the same choice on a friendly page.</p></div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap split">
+    <div>
+      <span class="kicker">For people</span>
+      <h2>Pay or PoW, in the browser</h2>
+      <p class="sub">Browsers get a page instead of JSON: the invoice first (QR code, <em>Open in wallet</em>, one click with WebLN), and <strong>No sats? Do the challenge instead</strong>.</p>
+      <ul class="ticks">
+        <li><strong>One moment.</strong> The browser solves the puzzle in Web Workers and shows the work: hashes per second, the best hash, a grid that fills up.</li>
+        <li><strong>Paid with a phone?</strong> The page notices the payment by itself and opens.</li>
+        <li><strong>Three modes:</strong> <code>button</code> (default), <code>auto</code> or <code>off</code>.</li>
+        <li><strong>Nothing from outside:</strong> strict Content-Security-Policy, hashed inline scripts only.</li>
+      </ul>
+    </div>
+    <div class="shots">
+      <div class="shot"><img src="assets/pay-or-pow.png" alt="Pay or PoW: the Lightning invoice and the challenge button"></div>
+      <div class="shot"><img src="assets/pay-or-pow-lottery.png" alt="One moment: the browser works on a Bitcoin block header"></div>
+    </div>
+  </div>
+</section>
+
+<section id="lottery" class="alt">
+  <div class="wrap">
+    <span class="kicker">New in this fork</span>
+    <h2>Every proof of work is a lottery ticket</h2>
+    <p class="sub">With <code>lottery</code> set, Spikes402 joins a solo mining pool (stratum v1) with your Bitcoin address. Puzzles are real block headers: the same double SHA-256 and the same cost, but a hash good enough for the network would be a whole block, paid to you.</p>
+    <div class="split">
+      <pre class="term"><span class="c">// config.json</span>
+"lottery": {
+  "pool": "solo.ckpool.org:3333",
+  "address": "bc1q…",
+  "worker": "mysite"
+},
+"browser_pow": { "mode": "button" }</pre>
+      <ul class="ticks">
+        <li><strong>Bots</strong> get a second challenge, <code>algorithm="bitcoin"</code>; old clients keep solving the ordinary one.</li>
+        <li><strong>Browsers</strong> play too: the 402 page computes on the header and says so.</li>
+        <li><strong>Shares</strong> that clear the pool's target are submitted; the dashboard counts them.</li>
+      </ul>
+    </div>
+    <div class="odds">
+      <div class="card"><b>~10²¹ H/s</b><p>the Bitcoin network today</p></div>
+      <div class="card"><b>~2 M hashes</b><p>a 2-second visit in a browser</p></div>
+      <div class="card"><b>≈ 3·10⁻¹⁸</b><p>its chance of a block. A lottery, honestly labelled, not an income.</p></div>
+    </div>
+  </div>
+</section>
+
+<section id="dashboard">
+  <div class="wrap">
+    <span class="kicker">Admin</span>
+    <h2>See who knocks, and who pays</h2>
+    <p class="sub">A local dashboard with no outside resources: the siege monitor, live settings, and <strong>Stats</strong> over 24 hours, 7 or 30 days, with the Bitcoin lottery panel.</p>
+    <div class="shot"><img src="assets/stats-top.png" alt="The Stats page: traffic, unlocks, sats, the Bitcoin lottery panel, visitors, pages and clients"></div>
+  </div>
+</section>
+
+<section class="alt">
+  <div class="wrap">
+    <span class="kicker">Under the hood</span>
+    <h2>Small, defensive, yours</h2>
+    <div class="features">
+      <div class="card"><h3>Lightning L402</h3><p>Invoices from your own phoenixd node with a receive-only password. Spikes402 never holds anyone's money.</p></div>
+      <div class="card"><h3>sha256d or Argon2id</h3><p>Proof-of-work priced in seconds per sat; memory-hard Argon2id when you want GPUs to sweat.</p></div>
+      <div class="card"><h3>Bot identification</h3><p>Verified crawlers by IP lists, reverse DNS and Web Bot Auth signatures; impostors are caught.</p></div>
+      <div class="card"><h3>Node protection</h3><p>Circuit breaker, global rate limits and caps on open invoices: a flood cannot drown your node.</p></div>
+      <div class="card"><h3>Surge pricing</h3><p>Optional: prices rise with sustained demand against each group's own baseline.</p></div>
+      <div class="card"><h3>Browser wallet</h3><p>A prototype extension pays trusted sites in one click, within daily caps you set.</p></div>
+    </div>
+  </div>
+</section>
+
+<section id="start">
+  <div class="wrap split">
+    <div>
+      <span class="kicker">Get started</span>
+      <h2>Try it in a minute</h2>
+      <p class="sub">With the fake Lightning backend: no node, no real money. A stand-in website on port 8080, the proxy on 8402, and the example bot.</p>
+      <p class="note">Experimental prototype. Not independently reviewed: do not use it with real money on mainnet yet.</p>
+    </div>
+    <pre class="term"><span class="p">$ </span>git clone -b lottery https://github.com/Malaga82/spikes402
+<span class="p">$ </span>cd spikes402 &amp;&amp; go build -o bin/ ./cmd/...
+<span class="p">$ </span>bin/demo-origin &amp; bin/spikes402 -config config.example.json &amp;
+<span class="p">$ </span>bin/spikes-bot -mode pow http://localhost:8402/premium/article
+<span class="c">bot: 402: solving sha256d proof-of-work…
+bot: 200 OK in 949ms</span></pre>
+  </div>
+</section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <span>Spikes402 · AGPLv3 · a fork of <a href="https://github.com/Choffolo/spikes402">Choffolo/spikes402</a> with the Bitcoin lottery</span>
+    <span>Inspired by <a href="https://dspace.mit.edu/handle/1721.1/153030">Jason Lowery's Softwar</a></span>
+  </div>
+</footer>
+<script>
+document.getElementById("theme").addEventListener("click",function(){
+  var r=document.documentElement,dark=r.dataset.theme?r.dataset.theme==="dark":!matchMedia("(prefers-color-scheme: light)").matches;
+  r.dataset.theme=dark?"light":"dark";try{localStorage.setItem("theme",r.dataset.theme)}catch(e){}
+});
+</script>
+</body>
+</html>

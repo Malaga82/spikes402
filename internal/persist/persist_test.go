@@ -284,3 +284,27 @@ func TestSyncDirNeverFails(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestIntentRejectsAnInvalidStateFile(t *testing.T) {
+	dir := t.TempDir()
+	store, err := OpenIntents(dir, testKey(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, intentName)
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Load(); !errors.Is(err, ErrCorrupt) {
+		t.Fatalf("empty intent: %v", err)
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(path, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Load(); !errors.Is(err, ErrCorrupt) {
+		t.Fatalf("unreadable intent: %v", err)
+	}
+}

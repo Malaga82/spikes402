@@ -7,6 +7,7 @@
   "pow_difficulty": 0,
   "pow_algorithm": "sha256d",
   "challenge_ttl_seconds": 600,
+  "pass_ttl_seconds": 10,
   "challenges_per_minute": 30,
   "max_invoices_per_minute": 300,
   "max_pending_invoices": 10000,

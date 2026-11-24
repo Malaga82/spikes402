@@ -39,7 +39,7 @@ function installChrome() {
       onInstalled: { addListener: () => undefined },
       onStartup: { addListener: () => undefined },
       onMessage: { addListener: (l: Listener) => (listener = l) },
-      getURL: () => "chrome-extension://abc/",
+      getURL: (path = "") => "chrome-extension://abc/" + path,
       getContexts: async () => [{}], // the wallet host is already running
       lastError: undefined,
       sendMessage: (msg: Record<string, unknown>, cb: (r: unknown) => void) => {
@@ -136,6 +136,24 @@ afterEach(() => {
 });
 
 describe("a payment that does not finish in time", () => {
+  it("reconciles a send registered by the wallet host even after the background restarts", async () => {
+    walletSend = () => new Promise(() => undefined);
+    void pay("https://evil.example", small());
+    await vi.waitFor(() => expect(sends).toHaveLength(1));
+    const id = sends[0].reservationId;
+    const msg = { type: "walletRequestId", id, requestId: "req-registered" };
+    expect((await call(msg, pageSender("https://evil.example"))).error).toBeTruthy();
+    expect((await call(msg, ext)).error).toMatch(/wallet host/);
+    expect((await call(msg, { url: "https://evil.example/", tab: { id: 1 } })).error).toMatch(/wallet host/);
+    // On Firefox the wallet host is a popup window: its messages carry a tab.
+    expect(await call(msg, { url: "chrome-extension://abc/offscreen.html", tab: { id: 9 } })).toEqual({ ok: true });
+    expect(state().reservations?.[0]).toMatchObject({ state: "in_flight", requestId: "req-registered" });
+    walletLookup = async () => ({ state: "settled", feeSats: 1 });
+    await boot();
+    await vi.waitFor(() => expect(state().reservations).toHaveLength(0));
+    expect(state().spend?.globalSats).toBe(6);
+  });
+
   it("stays counted in the budget as unconfirmed, not failed", async () => {
     walletSend = async () => PENDING_REPLY;
     const r = await pay("https://evil.example", small());

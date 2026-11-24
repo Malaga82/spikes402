@@ -3,8 +3,41 @@ package gate
 import (
 	"net/http"
 	"net/http/httptest"
+	"net/http/httputil"
+	"net/url"
 	"testing"
 )
+
+func TestProtectedCacheControlAfterEarlyHints(t *testing.T) {
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Link", "</style.css>; rel=preload; as=style")
+		w.WriteHeader(http.StatusEarlyHints)
+		w.Header().Set("Cache-Control", "public, s-maxage=3600")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer origin.Close()
+	u, err := url.Parse(origin.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := newFixture(t)
+	f.gate.opt.Next = httputil.NewSingleHostReverseProxy(u)
+	server := httptest.NewServer(f.gate)
+	defer server.Close()
+	req, err := http.NewRequest(http.MethodGet, server.URL+"/premium/a", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Authorization", f.pay(t, f.challenge(t, "/premium/a")))
+	res, err := server.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	if got := res.Header.Get("Cache-Control"); res.StatusCode != http.StatusOK || got != protectedCacheControl {
+		t.Fatalf("final response = %d, Cache-Control = %q", res.StatusCode, got)
+	}
+}
 
 func TestProtectedCacheControl(t *testing.T) {
 	f := newFixture(t)

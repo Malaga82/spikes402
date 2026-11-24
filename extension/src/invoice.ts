@@ -26,7 +26,7 @@ export function parseBolt11AmountSats(invoice: string): number | null {
 /** 32-byte payment hash as lowercase hex, from the invoice's `p` field. */
 export function parseBolt11PaymentHash(invoice: string): string {
   const raw = requireBolt11(invoice);
-  const sep = raw.indexOf("1", 2);
+  const sep = raw.lastIndexOf("1"); // the bech32 separator; the amount (lnbc10n…) may contain 1s too
   if (sep < 0 || sep + 7 >= raw.length) throw new InvoiceError("Invoice is malformed");
   const data = raw.slice(sep + 1, raw.length - 6); // drop the 6-character checksum
   const words: number[] = [];
@@ -82,7 +82,8 @@ export function isBolt11(s: string): boolean {
   }
 }
 
-function normalizeInvoice(invoice: string): string {
+/** The invoice as wallets expect it: trimmed, lower case, without a lightning: prefix. */
+export function normalizeInvoice(invoice: string): string {
   let raw = invoice.trim().toLowerCase();
   if (raw.startsWith("lightning:")) raw = raw.slice("lightning:".length);
   return raw;

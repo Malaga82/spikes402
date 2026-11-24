@@ -39,5 +39,7 @@ export function siteKey(origin: string): string | undefined {
   const u = new URL(origin);
   if (LOCAL_HOSTS.has(u.hostname)) return u.host;
   const host = u.hostname.replace(/\.$/, "");
-  return getDomain(host, { allowPrivateDomains: true }) ?? host;
+  const key = getDomain(host, { allowPrivateDomains: true }) ?? host;
+  // Keys index plain objects (sites, allowances, spend): "constructor" or "__proto__" would hit Object.prototype.
+  return key in Object.prototype ? undefined : key;
 }

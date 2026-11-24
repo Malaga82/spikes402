@@ -72,12 +72,16 @@ These are known and not fixed yet. Contributions are welcome.
   addresses a minute; beyond that, new clients share one bucket and get
   `429`. An attacker with that many addresses (easy with IPv6) can lock out
   new visitors for a while. The Lightning node stays protected.
+- **Reverse DNS saturation.** The crawler classifier limits concurrent DNS
+  lookups. When those slots are full, requests that need a new lookup are
+  classified as unknown and follow the configured unknown-client policy.
 - **AI admin with `ai_can_apply`.** When enabled, the AI admin can apply
   changes that make protection stricter or equal (for example a higher
   price). It cannot apply a change that would reduce protection (making
   pages free, lowering prices, easier proof-of-work, narrowing `protect`)
   or one that could take the site down (a whole-site `protect` pattern,
-  blocking or charging verified crawlers, a big price jump), toggle pause, withdraw, or approve proposals. Those stay suggestions
+  blocking or charging verified crawlers, a big price jump or a sharp
+  rate-limit cut from the last settings a person applied), toggle pause, withdraw, or approve proposals. Those stay suggestions
   for the human admin. It still reads text chosen by visitors (paths, bot
   host names), which could carry prompt injection. Leave `ai_can_apply`
   off, or review its proposals.

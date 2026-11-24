@@ -51,7 +51,7 @@ const tabPrices = new Map<number, TabPrice>();
 void updateState((s) => {
   s.prompts = [];
   s.reservations = s.reservations.map((r) => (r.state === "in_flight" ? { ...r, state: "uncertain" } : r));
-}).catch(() => undefined);
+}).then(reconcile).catch(() => undefined);
 
 type PopupMsg =
   | { type: "getState" }
@@ -64,6 +64,7 @@ type PopupMsg =
   | { type: "saveSettings"; settings: Partial<Settings> }
   | { type: "receive"; amountSats: number }
   | { type: "send"; destination: string; amountSats?: number }
+  | { type: "walletRequestId"; id: string; requestId: string }
   | { type: "confirmPayment"; id: string; choice: ConfirmChoice; dailySats?: number }
   | { type: "forgetSite"; site: string };
 
@@ -109,6 +110,20 @@ async function handle(msg: PopupMsg | PageMsg | PagePriceMsg | AutoPayMsg, sende
   if (msg.type === "autoPayCheck") return autoPayCheck(msg, sender);
   if (msg.type === "pagePrice") {
     handlePagePrice(msg, sender);
+    return { ok: true };
+  }
+  if (msg.type === "walletRequestId") {
+    // The wallet host reports the Spark request id as soon as the send starts,
+    // so a send whose answer is lost can still be looked up after a restart.
+    // Checked by exact URL, before the popup-only gate: on Firefox the host is
+    // a popup window, so its messages carry sender.tab.
+    if (sender.url !== chrome.runtime.getURL("offscreen.html")) throw new Error("Only the wallet host can register a send.");
+    const uncertain = await updateState((s) => {
+      const r = s.reservations.find((x) => x.id === msg.id);
+      if (r) r.requestId = msg.requestId;
+      return r?.state === "uncertain";
+    });
+    if (uncertain) scheduleReconcile();
     return { ok: true };
   }
   if (msg.type !== "webln" && !isExtensionPage(sender, chrome.runtime.getURL(""))) {
@@ -344,8 +359,9 @@ async function handleWebln(msg: PageMsg, sender: chrome.runtime.MessageSender): 
     const res = await walletCall<{ preimage?: string; detail: string; feeSats?: number }>("send", {
       destination: invoice,
       maxFeeSats: feeSats,
+      reservationId: reservation.id,
     });
-    if (!res.preimage) throw new WalletCallError("The wallet paid, but did not return a preimage.", true);
+    if (!res?.preimage) throw new WalletCallError("The wallet did not return a preimage.", true);
     await finishReservation(reservation.id, { settled: true, feeSats: res.feeSats }, "Paid.");
     markPaid(sender.tab?.id, amountSats ?? 0, sender.tab?.url);
     return { preimage: res.preimage };

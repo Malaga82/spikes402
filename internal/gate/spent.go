@@ -113,6 +113,13 @@ var errBusy = errors.New("server busy, try again later")
 // use marks id as spent. It returns errReplay if id was already spent,
 // or errBusy if the set is full: refusing is safer than forgetting.
 func (s *spentSet) use(id string, expires, now time.Time) error {
+	_, err := s.useFirst(id, expires, now)
+	return err
+}
+
+// useFirst is use, and also tells a new redemption (true) from the retry
+// of a released proof (false).
+func (s *spentSet) useFirst(id string, expires, now time.Time) (bool, error) {
 	s.mu.Lock()
 	key := compactID(id)
 	if e, seen := s.ids[key]; seen {
@@ -125,12 +132,12 @@ func (s *spentSet) use(id string, expires, now time.Time) error {
 				s.mu.Lock()
 				s.ids[key] = prev
 				s.mu.Unlock()
-				return err
+				return false, err
 			}
-			return nil
+			return false, nil
 		}
 		s.mu.Unlock()
-		return errReplay
+		return false, errReplay
 	}
 	s.inserts++
 	// Forget entries that can no longer be replayed: every 1024 inserts,
@@ -146,7 +153,7 @@ func (s *spentSet) use(id string, expires, now time.Time) error {
 	}
 	if len(s.ids) >= s.max {
 		s.mu.Unlock()
-		return errBusy
+		return false, errBusy
 	}
 	e := spentEntry{expires: expires.Unix(), first: now.Unix()}
 	s.ids[key] = e // reserve: a concurrent use of the same id is a replay
@@ -155,9 +162,9 @@ func (s *spentSet) use(id string, expires, now time.Time) error {
 		s.mu.Lock()
 		delete(s.ids, key)
 		s.mu.Unlock()
-		return err
+		return false, err
 	}
-	return nil
+	return true, nil
 }
 
 // persist writes a record to disk. It must be called without s.mu held.

@@ -1,11 +1,13 @@
 package gate
 
 import (
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -34,19 +36,27 @@ func TestEnergyWallPage(t *testing.T) {
 		t.Fatalf("got %d, want 402", rec.Code)
 	}
 	for _, want := range []string{
-		"invisible energy wall built with Bitcoin",
-		"Pay a few sats with the",
-		"solve a math puzzle with your computer",
+		`<span id="pw-title">Pay or PoW</span>`,
 		`href="https://github.com/Choffolo/spikes402#browser-wallet-extension-prototype"`,
-		`id="pow-go"`, `id="pow-bar"`, `id="pow-stats"`,
+		`<details id="pay" open><summary hidden>Pay 10 sats with Lightning instead</summary>`,
+		`id="pow-go">No sats? Do the challenge instead</button>`, "about 1 s of computing in your browser",
+		`id="pw-run" hidden`, `class="pw-grid"`, `id="pw-zeros"`,
+		`data-mode="button"`,
 		`data-worker="` + workerSrc + `"`,
 		`data-difficulty="8"`,
 		`<div class="paywall">`,
-		`class="ways"`,
-		`width="160"`,
+		`width="256"`,
 		`id="webln-pay"`, // the Lightning invoice flow is still there
 		`id="open-wallet"`, `id="pay-wait"`, "Open in wallet",
 		"data:image/png;base64,",
+		`class="logo"`,
+		`aria-hidden="true"`,
+		`class="logo-link"`,
+		`href="/"`,
+		`aria-label="Back to the site"`,
+		`rel="icon"`,
+		`type="image/svg+xml"`,
+		"data:image/svg",
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("page lacks %q", want)
@@ -57,12 +67,13 @@ func TestEnergyWallPage(t *testing.T) {
 	if !strings.Contains(body, `data-challenge="`+token+`"`) {
 		t.Error("puzzle and invoice use different tokens")
 	}
-	// Nothing from outside, nothing inline beyond the two hashed scripts.
-	if strings.Contains(body, "<script src") || strings.Contains(body, "http://") {
+	// Nothing from outside, nothing inline beyond the hashed scripts.
+	// The inline logo's xmlns is http://www.w3.org/2000/svg, not a fetch.
+	if strings.Contains(body, "<script src") || strings.Contains(body, `src="http://`) || strings.Contains(body, `href="http://`) {
 		t.Error("page loads or links something external")
 	}
 	csp := rec.Header().Get("Content-Security-Policy")
-	for _, want := range []string{"default-src 'none'", "worker-src 'self'", "connect-src 'self'", "frame-ancestors 'none'"} {
+	for _, want := range []string{"default-src 'none'", "img-src data:", "worker-src 'self'", "connect-src 'self'", "frame-ancestors 'none'"} {
 		if !strings.Contains(csp, want) {
 			t.Errorf("CSP %q lacks %q", csp, want)
 		}
@@ -215,5 +226,180 @@ console.log(JSON.stringify(out))`
 		} else if rec.Code != http.StatusPaymentRequired { // same token: already spent
 			t.Fatalf("a token must be spendable once, got %d", rec.Code)
 		}
+	}
+}
+
+// The worker's Bitcoin lottery mode finds the same first nonce as
+// pow.HeaderHash, within its range, and reports a range with no solution.
+func TestBrowserWorkerLotteryHeader(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node not installed")
+	}
+	header := make([]byte, 76)
+	for i := range header {
+		header[i] = byte(i*7 + 3)
+	}
+	const bits = 12
+	first := func(from uint32) uint32 {
+		for n := from; ; n++ {
+			if pow.HashZeroBits(pow.HeaderHash(header, n)) >= bits {
+				return n
+			}
+		}
+	}
+	worker := t.TempDir() + "/worker.js"
+	if err := os.WriteFile(worker, []byte(powWorkerJS), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	const run = `const vm=require("vm"),fs=require("fs");let out;const self={postMessage:m=>{out=m}};
+vm.runInNewContext(fs.readFileSync(process.argv[1],"utf8"),{self,TextEncoder,Date,Int32Array,Uint8Array,String,parseInt});
+self.onmessage({data:{header:process.argv[2],difficulty:+process.argv[3],start:+process.argv[4],end:+process.argv[5]}});
+console.log(JSON.stringify(out))`
+	want := first(0)
+	second := first(want + 1)
+	for _, c := range []struct {
+		start, end uint32
+		nonce      uint32
+		exhausted  bool
+	}{
+		{0, 4294967295, want, false},
+		{want + 1, 4294967295, second, false},
+		{want + 1, second - 1, 0, true},
+	} {
+		raw, err := exec.Command(node, "-e", run, worker, hex.EncodeToString(header), strconv.Itoa(bits),
+			strconv.FormatUint(uint64(c.start), 10), strconv.FormatUint(uint64(c.end), 10)).Output()
+		if err != nil {
+			t.Fatal(err)
+		}
+		var res struct {
+			Nonce     *uint32
+			Exhausted bool
+		}
+		if err := json.Unmarshal(raw, &res); err != nil {
+			t.Fatalf("%s: %v", raw, err)
+		}
+		if c.exhausted {
+			if !res.Exhausted || res.Nonce != nil {
+				t.Fatalf("range %d-%d: got %s, want exhausted", c.start, c.end, raw)
+			}
+			continue
+		}
+		if res.Nonce == nil || *res.Nonce != c.nonce {
+			t.Fatalf("range %d-%d: got %s, want nonce %d", c.start, c.end, raw, c.nonce)
+		}
+	}
+}
+
+// The puzzle script registers its pause listener before the WebLN script can
+// start an automatic payment.
+func TestPuzzleScriptBeforeWallet(t *testing.T) {
+	f := newFixture(t)
+	f.gate.opt.BrowserPoW = BrowserPoWAuto
+	s := inlineScripts(f.get("/premium/article", "", "text/html").Body.String())
+	if len(s) != 3 || s[0] != wallJS || s[1] != weblnJS {
+		t.Fatalf("script order: %d scripts, first is the puzzle: %v", len(s), len(s) > 0 && s[0] == wallJS)
+	}
+}
+
+// "auto" starts the puzzle at once ("One moment", the invoice folded away);
+// "off" offers no puzzle to people at all.
+func TestBrowserPoWModes(t *testing.T) {
+	f := newFixture(t)
+	f.gate.opt.BrowserPoW = BrowserPoWAuto
+	body := f.get("/premium/article", "", "text/html").Body.String()
+	for _, want := range []string{`<span id="pw-title">One moment</span>`, `<p id="pw-intro">`, `data-mode="auto"`,
+		`<details id="pay"><summary>Pay 10 sats with Lightning instead</summary>`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("auto page lacks %q", want)
+		}
+	}
+	if strings.Contains(body, `id="pow-go"`) {
+		t.Error("auto page has the start button")
+	}
+	f.gate.opt.BrowserPoW = BrowserPoWOff
+	body = f.get("/premium/article", "", "text/html").Body.String()
+	if strings.Contains(body, `id="pow-box"`) || len(inlineScripts(body)) != 2 || !strings.Contains(body, `<details id="pay" open>`) {
+		t.Error("off page still offers the puzzle")
+	}
+}
+
+// The worker reports the best hash of the range it searched, compared on all
+// 256 bits, as Bitcoin shows it.
+func TestBrowserWorkerBestHash(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node not installed")
+	}
+	header := make([]byte, 76)
+	for i := range header {
+		header[i] = byte(i*13 + 1)
+	}
+	const end = 30000
+	best := ""
+	for n := uint32(0); n <= end; n++ {
+		d := pow.HeaderHash(header, n)
+		for i, j := 0, 31; i < j; i, j = i+1, j-1 {
+			d[i], d[j] = d[j], d[i]
+		}
+		if h := hex.EncodeToString(d[:]); best == "" || h < best {
+			best = h
+		}
+	}
+	worker := t.TempDir() + "/worker.js"
+	if err := os.WriteFile(worker, []byte(powWorkerJS), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	const run = `const vm=require("vm"),fs=require("fs");let out;const self={postMessage:m=>{out=m}};
+vm.runInNewContext(fs.readFileSync(process.argv[1],"utf8"),{self,TextEncoder,Date,Int32Array,Uint8Array,String,parseInt});
+self.onmessage({data:{header:process.argv[2],difficulty:40,start:0,end:+process.argv[3]}});
+console.log(JSON.stringify(out))`
+	raw, err := exec.Command(node, "-e", run, worker, hex.EncodeToString(header), strconv.Itoa(end)).Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var res struct {
+		Exhausted bool
+		Hash      string
+	}
+	if err := json.Unmarshal(raw, &res); err != nil || !res.Exhausted || res.Hash != best {
+		t.Fatalf("worker best %q (exhausted %v), Go best %q (%v)", res.Hash, res.Exhausted, best, err)
+	}
+}
+
+func TestLogoAssetMatchesEmbed(t *testing.T) {
+	want, err := os.ReadFile(filepath.Join("..", "..", "assets", "logo.svg"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(want) != logoSVG {
+		t.Fatal("assets/logo.svg and internal/gate/assets/logo.svg differ")
+	}
+	if strings.Contains(string(logoInline), "<?xml") {
+		t.Error("inline logo still carries an XML declaration")
+	}
+	if !strings.HasPrefix(string(logoFavicon), "data:image/svg+xml;base64,") {
+		t.Fatalf("favicon is not a data URI: %s", logoFavicon[:40])
+	}
+}
+
+func TestWallPriceUnit(t *testing.T) {
+	if satUnit(1) != "sat" || satUnit(2) != "sats" || satUnit(10) != "sats" {
+		t.Fatalf("satUnit: 1=%q 2=%q 10=%q", satUnit(1), satUnit(2), satUnit(10))
+	}
+
+	f := newFixture(t)
+	body := f.get("/premium/article", "", "text/html").Body.String()
+	if !strings.Contains(body, "This page costs <strong>10 sats</strong>") || !strings.Contains(body, "Pay 10 sats with Lightning instead") {
+		t.Error("default price should read \"10 sats\"")
+	}
+
+	f.gate.live.Store(&Settings{PriceSats: 1, Protect: []string{"/premium/**"}, PoW: f.gate.opt.PoW, ChallengesPerMinute: 1000})
+	body = f.get("/premium/article", "", "text/html").Body.String()
+	if !strings.Contains(body, "This page costs <strong>1 sat</strong>") || !strings.Contains(body, "Pay 1 sat with Lightning instead") {
+		t.Error("a price of 1 should read \"1 sat\"")
+	}
+	if strings.Contains(body, "1 sats") {
+		t.Error("a price of 1 still says \"1 sats\"")
 	}
 }

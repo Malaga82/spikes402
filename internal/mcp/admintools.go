@@ -147,7 +147,7 @@ func AdminTools(c *AdminClient) []Tool {
 				}
 				return c.do(ctx, http.MethodPost, "/api/proposals", map[string]any{"changes": a.Changes, "reason": a.Reason})
 			}},
-		{Name: "apply_settings_change", Description: "Apply a settings change immediately and save it to the overrides file (config.json is not rewritten). Only works if the site owner set admin.ai_can_apply in the config file; otherwise use propose_settings_change. The AI cannot apply 'paused' even then, and cannot apply a change that would reduce protection (lower prices, easier proof-of-work, fewer protect patterns, a free bot policy, and similar), nor one that needs human confirmation (a whole-site protect pattern, making verified crawlers pay or be blocked, a big price jump, a sharp cut in challenges_per_minute). Propose those instead.",
+		{Name: "apply_settings_change", Description: "Apply a settings change immediately and save it to the overrides file (config.json is not rewritten). Only works if the site owner set admin.ai_can_apply in the config file; otherwise use propose_settings_change. The AI cannot apply 'paused' even then, and cannot apply a change that would reduce protection (lower prices, easier proof-of-work, fewer protect patterns, a free bot policy, and similar), nor one that needs human confirmation (a whole-site protect pattern, making verified crawlers pay or be blocked, a big price jump or a sharp cut in challenges_per_minute from the last settings a person applied). Propose those instead.",
 			InputSchema: map[string]any{"type": "object", "properties": map[string]any{"changes": changesSchema}, "required": []string{"changes"}},
 			Call: func(ctx context.Context, args json.RawMessage) (string, error) {
 				var a struct {

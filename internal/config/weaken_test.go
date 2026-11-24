@@ -159,4 +159,60 @@ func TestNeedsConfirmation(t *testing.T) {
 	}
 }
 
+// Cumulative AI steps that stay under the per-step limits still need
+// confirmation once they go past those limits from the original baseline.
+func TestNeedsConfirmationRatchet(t *testing.T) {
+	base := testCfg(t)
+	price := int64(10)
+	cpm := 30
+	start, err := base.Apply(Changes{PriceSats: &price, ChallengesPerMinute: &cpm})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Doubling under the 1000-sat ceiling is not flagged in a single step:
+	// 10, 20, 40, 80, 160, 320, 640, 1000.
+	prices := []int64{20, 40, 80, 160, 320, 640, 1000}
+	cur := start
+	for _, p := range prices {
+		n, err := cur.Apply(Changes{PriceSats: &p})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if why := NeedsConfirmation(cur, n); len(why) != 0 {
+			t.Fatalf("per-step %d -> %d should not be flagged: %v", cur.PriceSats, p, why)
+		}
+		if p > 20 {
+			if why := NeedsConfirmation(start, n); len(why) == 0 {
+				t.Fatalf("from baseline 10, price %d should need confirmation", p)
+			}
+		} else if why := NeedsConfirmation(start, n); len(why) != 0 {
+			t.Fatalf("from baseline 10, first doubling to %d should be allowed: %v", p, why)
+		}
+		cur = n
+	}
+
+	// Cutting in half (or just under) is not flagged in a single step:
+	// 30, 15, 8, 4, 2, 1.
+	rates := []int{15, 8, 4, 2, 1}
+	cur = start
+	for _, r := range rates {
+		n, err := cur.Apply(Changes{ChallengesPerMinute: &r})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if why := NeedsConfirmation(cur, n); len(why) != 0 {
+			t.Fatalf("per-step %d -> %d should not be flagged: %v", cur.ChallengesPerMinute, r, why)
+		}
+		if r < 15 {
+			if why := NeedsConfirmation(start, n); len(why) == 0 {
+				t.Fatalf("from baseline 30, challenges_per_minute %d should need confirmation", r)
+			}
+		} else if why := NeedsConfirmation(start, n); len(why) != 0 {
+			t.Fatalf("from baseline 30, first half to %d should be allowed: %v", r, why)
+		}
+		cur = n
+	}
+}
+
 func ptr[T any](v T) *T { return &v }

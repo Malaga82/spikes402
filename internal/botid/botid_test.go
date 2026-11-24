@@ -10,8 +10,10 @@ import (
 	"net/http/httptest"
 	"net/netip"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/Choffolo/spikes402/webbotauth"
 )
@@ -20,12 +22,17 @@ import (
 type fakeDNS struct {
 	ptr   map[string][]string
 	a     map[string][]string
+	aErr  map[string]error // forward lookup errors by name
 	fail  bool
+	gate  chan struct{} // if set, PTR lookups wait for it
 	calls atomic.Int64
 }
 
 func (f *fakeDNS) LookupAddr(_ context.Context, addr string) ([]string, error) {
 	f.calls.Add(1)
+	if f.gate != nil {
+		<-f.gate
+	}
 	if f.fail {
 		return nil, errors.New("timeout")
 	}
@@ -36,6 +43,9 @@ func (f *fakeDNS) LookupAddr(_ context.Context, addr string) ([]string, error) {
 }
 
 func (f *fakeDNS) LookupIPAddr(_ context.Context, host string) ([]net.IPAddr, error) {
+	if err := f.aErr[host]; err != nil {
+		return nil, err
+	}
 	var out []net.IPAddr
 	for _, s := range f.a[host] {
 		out = append(out, net.IPAddr{IP: net.ParseIP(s)})
@@ -55,6 +65,21 @@ func req(ua string) *http.Request {
 }
 
 const googleUA = "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)"
+
+func TestGoogleCrawlersUseTheirOwnPublishedRanges(t *testing.T) {
+	c := New(DefaultBots, nil)
+	c.resolver = &fakeDNS{}
+	c.SetRanges("Googlebot", []netip.Prefix{netip.MustParsePrefix("192.0.2.0/24")})
+	c.SetRanges("AdsBot-Google", []netip.Prefix{netip.MustParsePrefix("198.51.100.0/24")})
+	got := c.Classify(req("AdsBot-Google-Mobile"), net.ParseIP("198.51.100.10"), "https")
+	if got.Kind != Verified || got.Name != "AdsBot-Google" || got.Method != "ip-list" {
+		t.Fatalf("special crawler: %+v", got)
+	}
+	got = c.Classify(req(googleUA), net.ParseIP("192.0.2.10"), "https")
+	if got.Kind != Verified || got.Name != "Googlebot" || got.Method != "ip-list" {
+		t.Fatalf("common crawler: %+v", got)
+	}
+}
 
 func TestIPListClassification(t *testing.T) {
 	c := New(bots, nil)
@@ -88,10 +113,12 @@ func TestReverseDNSWhenNoList(t *testing.T) {
 			"66.249.66.1": {"crawl-66-249-66-1.googlebot.com."},
 			"6.6.6.6":     {"crawl.googlebot.com.evil.test."},
 			"7.7.7.7":     {"fake.googlebot.com."}, // PTR set by the attacker, forward does not confirm
+			"34.1.1.1":    {"crawl-34-1-1-1.googlebot.com."},
 		},
 		a: map[string][]string{
 			"crawl-66-249-66-1.googlebot.com": {"66.249.66.1"},
 			"fake.googlebot.com":              {"66.249.66.99"},
+			"crawl-34-1-1-1.googlebot.com":    {"34.1.1.1"},
 		},
 	}
 	c.resolver = dns
@@ -110,6 +137,13 @@ func TestReverseDNSWhenNoList(t *testing.T) {
 	c.SetRanges("Googlebot", []netip.Prefix{netip.MustParsePrefix("66.249.64.0/19")})
 	if got := c.Classify(req(googleUA), net.ParseIP("66.249.66.2"), "https"); got.Kind != Verified || got.Method != "ip-list" {
 		t.Fatalf("got %v", got)
+	}
+	// Outside the list, reverse DNS can still confirm a common crawler.
+	if got := c.Classify(req(googleUA), net.ParseIP("34.1.1.1"), "https"); got.Kind != Verified || got.Method != "reverse-dns" {
+		t.Fatalf("outside the list, good PTR: got %v", got)
+	}
+	if got := c.Classify(req(googleUA), net.ParseIP("6.6.6.6"), "https"); got.Kind != Impostor {
+		t.Fatalf("outside the list, bad PTR: got %v", got)
 	}
 }
 
@@ -224,5 +258,75 @@ func TestClassString(t *testing.T) {
 	got := Class{Kind: Verified, Name: "GPTBot", Method: "ip-list"}.String()
 	if got != `verified; name="GPTBot"; method=ip-list` {
 		t.Fatalf("got %s", got)
+	}
+}
+
+// A PTR name that does not exist (NXDOMAIN) confirms nothing: alone it makes
+// an impostor, not an unknown. A confirmed name is not undone by a later
+// name whose lookup fails.
+func TestForwardDNSNotFoundAndBreak(t *testing.T) {
+	c := New(bots, nil)
+	c.resolver = &fakeDNS{
+		ptr: map[string][]string{
+			"7.7.7.7":    {"nx.googlebot.com."},
+			"66.249.1.1": {"crawl-1.googlebot.com.", "broken.googlebot.com."},
+			"66.249.1.2": {"nx.googlebot.com.", "crawl-2.googlebot.com."},
+		},
+		a: map[string][]string{
+			"crawl-1.googlebot.com": {"66.249.1.1"},
+			"crawl-2.googlebot.com": {"66.249.1.2"},
+		},
+		aErr: map[string]error{
+			"nx.googlebot.com":     &net.DNSError{Err: "no such host", IsNotFound: true},
+			"broken.googlebot.com": &net.DNSError{Err: "timeout", IsTimeout: true},
+		},
+	}
+	for ip, want := range map[string]Kind{"7.7.7.7": Impostor, "66.249.1.1": Verified, "66.249.1.2": Verified} {
+		if got := c.Classify(req(googleUA), net.ParseIP(ip), "https"); got.Kind != want {
+			t.Errorf("%s: got %v, want %s", ip, got, want)
+		}
+	}
+}
+
+// A failing DNS is asked once a minute per address, not on every request,
+// and requests that arrive together share one lookup.
+func TestReverseDNSFailureCacheAndSharedLookup(t *testing.T) {
+	c := New(bots, nil)
+	now := time.Unix(1_800_000_000, 0)
+	c.now = func() time.Time { return now }
+	dns := &fakeDNS{fail: true}
+	c.resolver = dns
+	for i := 0; i < 5; i++ {
+		if got := c.Classify(req(googleUA), net.ParseIP("7.7.7.7"), "https"); got.Kind != Unknown {
+			t.Fatalf("got %v", got)
+		}
+	}
+	if n := dns.calls.Load(); n != 1 {
+		t.Fatalf("%d PTR lookups for one failing address, want 1", n)
+	}
+	now = now.Add(dnsErrorTTL + time.Second)
+	c.Classify(req(googleUA), net.ParseIP("7.7.7.7"), "https")
+	if n := dns.calls.Load(); n != 2 {
+		t.Fatalf("%d PTR lookups after the failure expired, want 2", n)
+	}
+
+	dns2 := &fakeDNS{gate: make(chan struct{})}
+	c.resolver = dns2
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			c.Classify(req(googleUA), net.ParseIP("8.8.4.4"), "https")
+		}()
+	}
+	for dns2.calls.Load() == 0 {
+		time.Sleep(time.Millisecond)
+	}
+	time.Sleep(20 * time.Millisecond) // let the others queue behind the first lookup
+	close(dns2.gate)
+	wg.Wait()
+	if n := dns2.calls.Load(); n != 1 {
+		t.Fatalf("%d PTR lookups for 8 concurrent requests, want 1", n)
 	}
 }

@@ -1,6 +1,7 @@
 # Deploying Spikes402
 
 A short guide for running the proxy in Docker, with TLS in front of it.
+For a first install on a Linux VPS, start with the [five-minute quickstart](quickstart.md).
 For flags and every config key, see the [README](../README.md).
 
 ## Docker and Compose
@@ -151,7 +152,9 @@ keep the origin's cache headers.
 - Mount a JSON file at `/etc/spikes402/config.json` (the image default).
   The process runs as uid 65532; the file must be readable by that user.
   `config.json` is never rewritten. Dashboard changes are saved under
-  `state_dir` as `config.overrides.json` (mode `0600`).
+  `state_dir` as `config.overrides.json` (mode `0600`). The last settings
+  a person applied are also kept there as `config.confirmed.json`, so the
+  AI cannot ratchet past confirmation limits across restarts.
 - Spent tokens, withdrawal intents, and dashboard overrides are written
   under `state_dir` (in the example, `/var/lib/spikes402`). The directory
   is mode 0700, the files 0600, and spent/intent records are HMAC-sealed

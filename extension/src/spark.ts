@@ -1,7 +1,7 @@
 import { SparkWallet } from "@buildonspark/spark-sdk";
 import type { WalletBackend } from "./backend";
 import { PaymentPendingError, WalletError } from "./backend";
-import { assertPreimageMatchesInvoice, isBolt11, parseBolt11AmountSats } from "./invoice";
+import { assertPreimageMatchesInvoice, isBolt11, normalizeInvoice, parseBolt11AmountSats } from "./invoice";
 import {
   feeSatsFromSendRequest,
   lightningHint,
@@ -100,15 +100,20 @@ export const sparkBackend: WalletBackend = {
       // The same fee rule the budget uses, from the amount that will be paid.
       const maxFeeSats = opts?.maxFeeSats ?? maxFeeSatsFor(amount ?? parseBolt11AmountSats(dest) ?? 10);
       const payment = await w.payLightningInvoice({
-        invoice: dest,
+        invoice: normalizeInvoice(dest),
         maxFeeSats,
         ...(amount !== undefined ? { amountSatsToSend: amount } : {}),
+      }).catch(() => {
+        throw new PaymentPendingError("The Spark service did not confirm whether it started the payment.");
       });
       if (!payment || !("id" in payment) || !payment.id) {
-        throw new WalletError("The payment did not return a Lightning send request (no preimage).");
+        throw new PaymentPendingError("The payment did not return a Lightning send request.");
       }
+      await opts?.onRequest?.(payment.id).catch(() => undefined);
       const settled = await waitForPreimage(w, payment.id);
-      await assertPreimageMatchesInvoice(dest, settled.preimage);
+      await assertPreimageMatchesInvoice(dest, settled.preimage).catch(() => {
+        throw new PaymentPendingError("The wallet could not verify the returned preimage.", payment.id);
+      });
       return {
         preimage: settled.preimage,
         detail: `preimage ${settled.preimage}`,
@@ -142,7 +147,9 @@ async function waitForPreimage(
   id: string,
 ): Promise<{ preimage: string; feeSats?: number }> {
   for (let i = 0; i < PREIMAGE_POLL_ATTEMPTS; i++) {
-    const req = await w.getLightningSendRequest(id);
+    const req = await w.getLightningSendRequest(id).catch(() => {
+      throw new PaymentPendingError("The Spark service could not check the payment status.", id);
+    });
     const preimage = sendRequestHasPreimage(req);
     if (preimage) return { preimage, feeSats: feeSatsFromSendRequest(req) };
     if (sendRequestFailed(req?.status)) {

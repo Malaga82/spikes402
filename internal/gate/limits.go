@@ -78,7 +78,8 @@ type offer struct {
 	expires time.Time
 	price   int64
 	pow     pow.Params
-	qr      string // data URI, filled once when the invoice is created
+	qr      string        // data URI, filled once when the invoice is created
+	lottery *lotteryOffer // the Bitcoin lottery challenge of the same offer, if any
 }
 
 // pendingOffers remembers the invoices handed out and not yet expired,
@@ -128,6 +129,20 @@ func (p *pendingOffers) get(key string, now time.Time, minLeft time.Duration) (o
 		return offer{}, false
 	}
 	return o, true
+}
+
+// updateLottery keeps the first refresh of an offer and never restores a dropped offer.
+func (p *pendingOffers) updateLottery(key string, old offer, next *lotteryOffer) *lotteryOffer {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if o, ok := p.offers[key]; ok && o.id == old.id {
+		if o.lottery != old.lottery {
+			return o.lottery
+		}
+		o.lottery = next
+		p.offers[key] = o
+	}
+	return next
 }
 
 // reserve holds one invoice slot. The caller must put or cancelReserve.

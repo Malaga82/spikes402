@@ -57,7 +57,7 @@ func newEnvJSON(t *testing.T, adminExtra, rootExtra string) *env {
 	e := &env{ln: lightning.NewFake(), now: time.Unix(1_800_000_000, 0), file: file}
 	e.mon = NewMonitor(cfg.Admin.VisitorIPs, e.now)
 	e.gate = gate.New(gate.Options{
-		PriceSats: cfg.PriceSats, Protect: cfg.Protect, Prices: cfg.Prices, Paused: cfg.Paused, PoW: cfg.PoW, ChallengeTTL: cfg.ChallengeTTL(),
+		PriceSats: cfg.PriceSats, Protect: cfg.Protect, Prices: cfg.Prices, Paused: cfg.Paused, PoW: cfg.PoW, ChallengeTTL: cfg.ChallengeTTL(), PassTTL: cfg.PassTTL(),
 		SecretKey: []byte(strings.Repeat("s", 32)), Lightning: e.ln, Next: http.NotFoundHandler(),
 		ChallengesPerMinute: cfg.ChallengesPerMinute, MaxInvoicesPerMinute: 1000, MaxPendingInvoices: 1000,
 		Observer: e.mon.Observe,
@@ -773,4 +773,103 @@ func TestAICannotApplyTakedown(t *testing.T) {
 	if rec, out := e.call("PUT", "/api/settings", aiKey, map[string]any{"bot_policies": map[string]any{"unknown": map[string]any{"action": "block"}}}); rec.Code != 200 {
 		t.Fatalf("AI could not tighten unknown clients: %d %v", rec.Code, out)
 	}
+}
+
+// Issue #55: many small AI applies, each under the per-step threshold,
+// must not reach the confirmation ceiling. Drift is measured from the
+// last settings a person applied, including after a restart.
+func TestAICannotRatchetPastConfirmation(t *testing.T) {
+	e := newEnv(t, `,"ai_can_apply":true`)
+
+	// 10 -> 20 is a single allowed doubling; 40 would be 4x the baseline.
+	rec, out := e.call("PUT", "/api/settings", aiKey, map[string]any{"price_sats": 20})
+	if rec.Code != 200 || e.gate.Settings().PriceSats != 20 {
+		t.Fatalf("first doubling: %d %v", rec.Code, out)
+	}
+	for _, p := range []int{40, 80, 160, 320, 640, 1000} {
+		rec, out = e.call("PUT", "/api/settings", aiKey, map[string]any{"price_sats": p})
+		if rec.Code != 403 || e.gate.Settings().PriceSats != 20 {
+			t.Fatalf("price ratchet to %d: %d %v gate=%d", p, rec.Code, out, e.gate.Settings().PriceSats)
+		}
+	}
+
+	// A proposal that would complete the ratchet still needs confirm=1.
+	rec, p := e.call("POST", "/api/proposals", aiKey, map[string]any{"changes": map[string]any{"price_sats": 40}})
+	if rec.Code != 200 {
+		t.Fatalf("propose 40: %d %v", rec.Code, p)
+	}
+	lrec, _ := e.call("GET", "/api/proposals", adminKey, nil)
+	var list []map[string]any
+	if err := json.Unmarshal(lrec.Body.Bytes(), &list); err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 1 || list[0]["risks"] == nil {
+		t.Fatalf("proposal for 40 not flagged against baseline: %v", list)
+	}
+	id := p["id"].(string)
+	if rec, out = e.call("POST", "/api/proposals/"+id+"/approve", adminKey, nil); rec.Code != 409 || e.gate.Settings().PriceSats != 20 {
+		t.Fatalf("approve without confirm: %d %v gate=%d", rec.Code, out, e.gate.Settings().PriceSats)
+	}
+	if rec, _ = e.call("POST", "/api/proposals/"+id+"/reject", adminKey, nil); rec.Code != 200 {
+		t.Fatalf("reject: %d", rec.Code)
+	}
+
+	// 30 -> 15 is an allowed half-cut; 8 is already more than half off the baseline.
+	rec, out = e.call("PUT", "/api/settings", aiKey, map[string]any{"challenges_per_minute": 15})
+	if rec.Code != 200 || e.gate.Settings().ChallengesPerMinute != 15 {
+		t.Fatalf("first half-cut: %d %v", rec.Code, out)
+	}
+	for _, r := range []int{8, 4, 2, 1} {
+		rec, out = e.call("PUT", "/api/settings", aiKey, map[string]any{"challenges_per_minute": r})
+		if rec.Code != 403 || e.gate.Settings().ChallengesPerMinute != 15 {
+			t.Fatalf("challenge ratchet to %d: %d %v gate=%d", r, rec.Code, out, e.gate.Settings().ChallengesPerMinute)
+		}
+	}
+
+	// A restart must not forget the human baseline (still 10 sats / 30 per minute).
+	e2 := reloadEnv(t, e)
+	rec, out = e2.call("PUT", "/api/settings", aiKey, map[string]any{"price_sats": 40})
+	if rec.Code != 403 || e2.gate.Settings().PriceSats != 20 {
+		t.Fatalf("after restart, price 40: %d %v gate=%d", rec.Code, out, e2.gate.Settings().PriceSats)
+	}
+	rec, out = e2.call("PUT", "/api/settings", aiKey, map[string]any{"challenges_per_minute": 8})
+	if rec.Code != 403 || e2.gate.Settings().ChallengesPerMinute != 15 {
+		t.Fatalf("after restart, cpm 8: %d %v gate=%d", rec.Code, out, e2.gate.Settings().ChallengesPerMinute)
+	}
+
+	// Once a person applies new settings, those become the baseline.
+	rec, out = e2.call("PUT", "/api/settings", adminKey, map[string]any{"price_sats": 40, "challenges_per_minute": 15})
+	if rec.Code != 200 {
+		t.Fatalf("human apply: %d %v", rec.Code, out)
+	}
+	rec, out = e2.call("PUT", "/api/settings", aiKey, map[string]any{"price_sats": 80})
+	if rec.Code != 200 || e2.gate.Settings().PriceSats != 80 {
+		t.Fatalf("AI doubling from new baseline: %d %v", rec.Code, out)
+	}
+	rec, out = e2.call("PUT", "/api/settings", aiKey, map[string]any{"price_sats": 160})
+	if rec.Code != 403 || e2.gate.Settings().PriceSats != 80 {
+		t.Fatalf("AI 4x new baseline: %d %v gate=%d", rec.Code, out, e2.gate.Settings().PriceSats)
+	}
+}
+
+// reloadEnv starts a new admin server from e's config and overrides,
+// as if the process had restarted.
+func reloadEnv(t *testing.T, e *env) *env {
+	t.Helper()
+	cfg, err := config.Load(e.file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := &env{ln: lightning.NewFake(), now: e.now, file: e.file}
+	n.mon = NewMonitor(cfg.Admin.VisitorIPs, n.now)
+	n.gate = gate.New(gate.Options{
+		PriceSats: cfg.PriceSats, Protect: cfg.Protect, Prices: cfg.Prices, Paused: cfg.Paused, PoW: cfg.PoW, ChallengeTTL: cfg.ChallengeTTL(), PassTTL: cfg.PassTTL(),
+		SecretKey: []byte(strings.Repeat("s", 32)), Lightning: n.ln, Next: http.NotFoundHandler(),
+		ChallengesPerMinute: cfg.ChallengesPerMinute, MaxInvoicesPerMinute: 1000, MaxPendingInvoices: 1000,
+		Observer: n.mon.Observe,
+	})
+	n.srv = New(Options{Config: cfg, ConfigFile: e.file, Gate: n.gate, Monitor: n.mon, Node: n.ln})
+	n.srv.now = func() time.Time { return n.now }
+	n.h = n.srv.Handler()
+	return n
 }

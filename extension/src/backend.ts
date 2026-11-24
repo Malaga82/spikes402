@@ -14,7 +14,7 @@ export type WalletBackend = {
   send(
     destination: string,
     amountSats?: number,
-    opts?: { maxFeeSats?: number },
+    opts?: { maxFeeSats?: number; onRequest?: (id: string) => Promise<void> },
   ): Promise<{ preimage?: string; detail: string; feeSats?: number }>;
   /** Ask the wallet what became of a Lightning payment that did not finish in time. */
   lookupSend(requestId: string, invoice: string): Promise<{ state: "settled" | "failed" | "pending"; feeSats?: number }>;
@@ -28,13 +28,12 @@ export class WalletError extends Error {
 }
 
 /**
- * The payment was handed to the network but we did not see it settle or fail
- * in time. It may still go through, so it must stay counted until looked up.
+ * The payment may have been sent, but its outcome is unknown. Keep it counted.
  */
 export class PaymentPendingError extends WalletError {
   constructor(
     message: string,
-    readonly requestId: string,
+    readonly requestId?: string,
   ) {
     super(message);
     this.name = "PaymentPendingError";

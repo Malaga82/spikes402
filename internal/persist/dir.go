@@ -116,3 +116,11 @@ func fileMode(path string) (os.FileMode, error) {
 	}
 	return st.Mode().Perm(), nil
 }
+
+// WriteFile writes data to dir/name (mode 0600) atomically and fsyncs.
+func WriteFile(dir, name string, data []byte) error {
+	if err := Prepare(dir); err != nil {
+		return err
+	}
+	return writeAtomic(dir, name, data)
+}

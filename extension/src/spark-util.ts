@@ -43,11 +43,8 @@ export function looksLikeSparkAddress(s: string): boolean {
 const FAILED_SEND = new Set([
   "USER_TRANSFER_VALIDATION_FAILED",
   "LIGHTNING_PAYMENT_FAILED",
-  "PREIMAGE_PROVIDING_FAILED",
   "TRANSFER_FAILED",
-  "PENDING_USER_SWAP_RETURN",
   "USER_SWAP_RETURNED",
-  "USER_SWAP_RETURN_FAILED",
 ]);
 
 export function sendRequestFailed(status: string | undefined): boolean {

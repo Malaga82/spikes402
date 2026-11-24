@@ -1,6 +1,7 @@
 # Local configuration may contain secrets: only config.example.json is tracked.
 /config.json
 *.overrides.json
+*.stats.json
 /bin/
 
 # Browser extension prototype
