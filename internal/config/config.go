@@ -2,6 +2,7 @@
 package config
 
 import (
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -70,7 +71,17 @@ type Config struct {
 	StateDir             string             `json:"state_dir"`               // spent tokens and withdrawal intents; default "<config dir>/state"
 	Lightning            Lightning          `json:"lightning"`
 
-	Paused bool `json:"paused,omitempty"` // serve protected paths free; no invoices (dashboard toggle)
+	Paused      bool `json:"paused,omitempty"`       // serve protected paths free; no invoices (dashboard toggle)
+	ObserveOnly bool `json:"observe_only,omitempty"` // dry-run: serve free, record URLs & prices that would get 402
+
+	// PublicStats exposes GET /.spikes402/stats with aggregate counters
+	// (unlocks and sats received). Off by default.
+	PublicStats bool `json:"public_stats,omitempty"`
+
+	// PublicSiege exposes GET /.spikes402/siege: a delayed (8 s),
+	// anonymised view of the siege monitor for site visitors, linked from
+	// the 402 page. Off by default.
+	PublicSiege bool `json:"public_siege,omitempty"`
 
 	ProtectCaseSensitive bool `json:"protect_case_sensitive"` // match "protect" patterns case-sensitively (default: case-insensitive)
 	MaxConnections       int  `json:"max_connections"`        // open client connections at once, default 10000
@@ -124,9 +135,13 @@ type Withdraw struct {
 
 // Lightning selects and configures the Lightning backend.
 type Lightning struct {
-	Backend          string `json:"backend"`           // "fake" or "phoenixd"
+	Backend          string `json:"backend"`           // "fake", "phoenixd" or "lnd"
 	PhoenixdURL      string `json:"phoenixd_url"`      // default "http://127.0.0.1:9740"
 	PhoenixdPassword string `json:"phoenixd_password"` // or env PHOENIXD_PASSWORD
+	LNDURL           string `json:"lnd_url"`           // default "https://127.0.0.1:8080"
+	LNDMacaroon      string `json:"lnd_macaroon"`      // hex-encoded macaroon, or env LND_MACAROON
+	LNDMacaroonPath  string `json:"lnd_macaroon_path"` // optional path to .macaroon file (receive-only invoice.macaroon)
+	LNDTLSCertPath   string `json:"lnd_tls_cert_path"` // optional path to LND tls.cert PEM
 }
 
 // Load reads, completes and validates a configuration file. Secrets may
@@ -147,6 +162,16 @@ func Load(file string) (*Config, error) {
 	}
 	if v := os.Getenv("PHOENIXD_PASSWORD"); v != "" {
 		c.Lightning.PhoenixdPassword = v
+	}
+	if v := os.Getenv("LND_MACAROON"); v != "" {
+		c.Lightning.LNDMacaroon = v
+	}
+	if c.Lightning.LNDMacaroon == "" && c.Lightning.LNDMacaroonPath != "" {
+		raw, err := os.ReadFile(c.Lightning.LNDMacaroonPath)
+		if err != nil {
+			return nil, fmt.Errorf("lnd_macaroon_path: %w", err)
+		}
+		c.Lightning.LNDMacaroon = hex.EncodeToString(raw)
 	}
 	if v := os.Getenv("SPIKES402_ADMIN_KEY"); v != "" {
 		c.Admin.Key = v
@@ -253,6 +278,9 @@ func (c *Config) complete() error {
 	}
 	if c.Lightning.Backend == "phoenixd" && c.Lightning.PhoenixdURL == "" {
 		c.Lightning.PhoenixdURL = "http://127.0.0.1:9740"
+	}
+	if c.Lightning.Backend == "lnd" && c.Lightning.LNDURL == "" {
+		c.Lightning.LNDURL = "https://127.0.0.1:8080"
 	}
 
 	u, err := url.Parse(c.Origin)
@@ -397,8 +425,18 @@ func (c *Config) complete() error {
 		if c.Lightning.PhoenixdPassword == "" {
 			return errors.New(`phoenixd needs "phoenixd_password" (or PHOENIXD_PASSWORD)`)
 		}
+	case "lnd":
+		if c.WebBotAuthDevMode {
+			return errors.New(`"web_bot_auth_dev_mode" is for local testing only and cannot be used with a real Lightning backend`)
+		}
+		if c.SecretKey == "" {
+			return errors.New(`"secret_key" (or SPIKES402_SECRET_KEY) is required with a real Lightning backend`)
+		}
+		if c.Lightning.LNDMacaroon == "" {
+			return errors.New(`lnd needs "lnd_macaroon", "lnd_macaroon_path" or LND_MACAROON`)
+		}
 	default:
-		return errors.New(`"lightning.backend" must be "fake" or "phoenixd"`)
+		return errors.New(`"lightning.backend" must be "fake", "phoenixd" or "lnd"`)
 	}
 	if err := c.checkAdmin(); err != nil {
 		return err
@@ -531,6 +569,9 @@ func (c *Config) checkWithdraw() error {
 			return errors.New(`"withdraw.password" must differ from every other key and password`)
 		}
 	}
+	if c.Lightning.Backend == "lnd" {
+		return errors.New(`withdrawals are not supported with the "lnd" backend (use a receive-only invoice.macaroon)`)
+	}
 	if c.Lightning.Backend == "phoenixd" {
 		if w.PhoenixdFullPassword == "" || w.PhoenixdFullPassword == c.Lightning.PhoenixdPassword {
 			return errors.New(`withdrawals need phoenixd's FULL-ACCESS password in "withdraw.phoenixd_full_password" (or PHOENIXD_FULL_PASSWORD)`)
@@ -624,11 +665,12 @@ type Changes struct {
 	ChallengesPerMinute *int                    `json:"challenges_per_minute,omitempty"`
 	BotPolicies         *map[string]gate.Policy `json:"bot_policies,omitempty"`
 	Paused              *bool                   `json:"paused,omitempty"`
+	ObserveOnly         *bool                   `json:"observe_only,omitempty"`
 }
 
 // Empty reports whether ch changes nothing.
 func (ch Changes) Empty() bool {
-	return ch.PriceSats == nil && ch.Prices == nil && ch.Protect == nil && ch.PowSecondsPerSat == nil && ch.ChallengesPerMinute == nil && ch.BotPolicies == nil && ch.Paused == nil
+	return ch.PriceSats == nil && ch.Prices == nil && ch.Protect == nil && ch.PowSecondsPerSat == nil && ch.ChallengesPerMinute == nil && ch.BotPolicies == nil && ch.Paused == nil && ch.ObserveOnly == nil
 }
 
 // Apply returns a validated copy of c with the changes; c is untouched.
@@ -652,6 +694,9 @@ func (c *Config) Apply(ch Changes) (*Config, error) {
 	}
 	if ch.Paused != nil {
 		n.Paused = *ch.Paused
+	}
+	if ch.ObserveOnly != nil {
+		n.ObserveOnly = *ch.ObserveOnly
 	}
 	if ch.PowSecondsPerSat != nil {
 		if v := *ch.PowSecondsPerSat; !(v > 0 && v <= 3600) || math.IsNaN(v) {
@@ -688,6 +733,7 @@ type Public struct {
 	Prices               []gate.PriceRule       `json:"prices"`
 	Surge                gate.SurgeConfig       `json:"surge"`
 	Paused               bool                   `json:"paused"`
+	ObserveOnly          bool                   `json:"observe_only"`
 	PowAlgorithm         string                 `json:"pow_algorithm"`
 	PowSecondsPerSat     float64                `json:"pow_seconds_per_sat"`
 	PowDifficulty        int                    `json:"pow_difficulty"`
@@ -711,13 +757,13 @@ type Public struct {
 // Public returns the configuration without secrets.
 func (c *Config) Public() Public {
 	p := Public{
-		Origin: c.Origin, Protect: append([]string(nil), c.Protect...), PriceSats: c.PriceSats, Prices: c.Prices, Surge: c.Surge, Paused: c.Paused, PowAlgorithm: c.PowAlgorithm,
+		Origin: c.Origin, Protect: append([]string(nil), c.Protect...), PriceSats: c.PriceSats, Prices: c.Prices, Surge: c.Surge, Paused: c.Paused, ObserveOnly: c.ObserveOnly, PowAlgorithm: c.PowAlgorithm,
 		PowSecondsPerSat: c.PowSecondsPerSat, PowDifficulty: c.PowDifficulty, Argon2MemoryMiB: c.Argon2MemoryMiB,
 		CurrentPoW: c.PoW(c.PriceSats), ChallengeTTLSeconds: c.ChallengeTTLSeconds, PassTTLSeconds: int(c.PassTTL() / time.Second), ChallengesPerMinute: c.ChallengesPerMinute,
 		MaxInvoicesPerMinute: c.MaxInvoicesPerMinute, MaxPendingInvoices: c.MaxPendingInvoices,
 		IdentifyBots: c.IdentifyBotsOn(), BotPolicies: c.BotPolicies, LightningBackend: c.Lightning.Backend,
 		AICanApply: c.Admin.AICanApply, VisitorIPs: c.Admin.VisitorIPs, WithdrawEnabled: c.Withdraw.Enabled,
-		Editable: []string{"price_sats", "prices", "protect", "pow_seconds_per_sat", "challenges_per_minute", "bot_policies", "paused"},
+		Editable: []string{"price_sats", "prices", "protect", "pow_seconds_per_sat", "challenges_per_minute", "bot_policies", "paused", "observe_only"},
 	}
 	if p.BotPolicies == nil {
 		p.BotPolicies = map[string]gate.Policy{}
@@ -735,7 +781,7 @@ func (c *Config) Public() Public {
 func (c *Config) GateSettings() gate.Settings {
 	return gate.Settings{
 		PriceSats: c.PriceSats, Prices: append([]gate.PriceRule(nil), c.Prices...),
-		Protect: append([]string(nil), c.Protect...), Paused: c.Paused,
+		Protect: append([]string(nil), c.Protect...), Paused: c.Paused, ObserveOnly: c.ObserveOnly,
 		PoW: c.PoW, Policies: c.BotPolicies, ChallengesPerMinute: c.ChallengesPerMinute,
 		Surge: c.Surge,
 	}

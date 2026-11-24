@@ -97,6 +97,8 @@ func main() {
 		log.Print("WARNING: fake Lightning backend: for development only, invoices are not real")
 	case "phoenixd":
 		backend = &lightning.Phoenixd{URL: cfg.Lightning.PhoenixdURL, Password: cfg.Lightning.PhoenixdPassword}
+	case "lnd":
+		backend = &lightning.LND{URL: cfg.Lightning.LNDURL, Macaroon: cfg.Lightning.LNDMacaroon, TLSCertPath: cfg.Lightning.LNDTLSCertPath}
 	}
 
 	// Bot identification: Web Bot Auth signatures first, then the IP
@@ -114,8 +116,26 @@ func main() {
 	}
 
 	// The admin dashboard, if enabled, watches every protected request.
+	// Public aggregate stats and public siege, if enabled, share the same
+	// events without storing visitor or path data.
 	var monitor *admin.Monitor
 	var observer func(gate.Event)
+	var pubStats *gate.PublicStats
+	if cfg.PublicStats {
+		s, err := gate.LoadPublicStats(cfg.StateDir, time.Now())
+		if err != nil {
+			log.Printf("public stats: starting fresh (%v)", err)
+			s = gate.NewPublicStats(time.Now())
+		}
+		s.StartPersisting(context.Background(), cfg.StateDir, 0)
+		pubStats = s
+		log.Print("public aggregate stats at /.spikes402/stats")
+	}
+	var pubSiege *gate.PublicSiege
+	if cfg.PublicSiege {
+		pubSiege = gate.NewPublicSiege()
+		log.Print("public siege view at /.spikes402/siege (delayed, anonymised)")
+	}
 	if cfg.AdminEnabled() {
 		monitor = admin.NewMonitor(cfg.Admin.VisitorIPs, time.Now())
 		observer = monitor.Observe
@@ -129,6 +149,7 @@ func main() {
 		Prices:       cfg.Prices,
 		Previews:     cfg.Previews,
 		Paused:       cfg.Paused,
+		ObserveOnly:  cfg.ObserveOnly,
 		PoW:          cfg.PoW,
 		ChallengeTTL: cfg.ChallengeTTL(),
 		PassTTL:      cfg.PassTTL(),
@@ -147,6 +168,8 @@ func main() {
 		Policies:           cfg.BotPolicies,
 		Surge:              cfg.Surge,
 		Observer:           observer,
+		PublicStats:        pubStats,
+		PublicSiege:        pubSiege,
 		Argon2MaxMemoryMiB: cfg.Argon2MaxMemoryMiB,
 		Lottery:            startLottery(cfg),
 		BrowserPoW:         cfg.BrowserPoW.Mode,
@@ -156,9 +179,11 @@ func main() {
 	})
 	mux.Handle("/", g)
 
+	var adm *admin.Server
 	if cfg.AdminEnabled() {
-		startAdmin(cfg, *configFile, g, monitor, backend, intentStore)
+		adm = startAdmin(cfg, *configFile, g, monitor, backend, intentStore)
 	}
+	watchReload(*configFile, g, adm)
 
 	srv := &http.Server{
 		Addr:              cfg.Listen,
@@ -192,6 +217,9 @@ func main() {
 	if cfg.Paused {
 		log.Print("protection is paused: protected paths are served free and no invoices will be created")
 	}
+	if cfg.ObserveOnly {
+		log.Print("observation mode (observe_only): protected paths are served free; visits that would get 402 are recorded with their price")
+	}
 	ln, err := net.Listen("tcp", cfg.Listen)
 	if err != nil {
 		log.Fatal(err)
@@ -219,7 +247,7 @@ func startLottery(cfg *config.Config) gate.Lottery {
 
 // startAdmin serves the admin API and dashboard on their own address
 // (localhost by default), separate from the public proxy.
-func startAdmin(cfg *config.Config, configFile string, g *gate.Gate, monitor *admin.Monitor, backend lightning.Backend, intent admin.IntentStore) {
+func startAdmin(cfg *config.Config, configFile string, g *gate.Gate, monitor *admin.Monitor, backend lightning.Backend, intent admin.IntentStore) *admin.Server {
 	opt := admin.Options{Config: cfg, ConfigFile: configFile, Gate: g, Monitor: monitor, IntentStore: intent}
 	if insp, ok := backend.(lightning.Inspector); ok {
 		opt.Node = insp
@@ -257,6 +285,7 @@ func startAdmin(cfg *config.Config, configFile string, g *gate.Gate, monitor *ad
 		}
 	}
 	log.Printf("admin dashboard on http://%s (%s)", cfg.Admin.Listen, ai)
+	return adm
 }
 
 // originProxy forwards requests to the website. Idle connections are kept

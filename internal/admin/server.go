@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"log"
 	"maps"
@@ -23,6 +24,7 @@ import (
 	"github.com/Choffolo/spikes402/internal/config"
 	"github.com/Choffolo/spikes402/internal/gate"
 	"github.com/Choffolo/spikes402/internal/lightning"
+	"github.com/Choffolo/spikes402/internal/siegeart"
 )
 
 //go:embed web
@@ -136,6 +138,15 @@ func (s *Server) rememberConfirmed(n *config.Config) {
 	}
 }
 
+// ReloadConfig replaces the server's in-memory config after a SIGHUP reload.
+func (s *Server) ReloadConfig(cfg *config.Config) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.cfg = cfg
+	s.baseline = cfg
+	s.baselineErr = nil
+}
+
 // Handler returns the HTTP handler: the dashboard at "/" and the API at "/api/".
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
@@ -144,6 +155,10 @@ func (s *Server) Handler() http.Handler {
 	for _, p := range []string{"GET /{$}", "GET /app.js", "GET /style.css"} {
 		mux.Handle(p, files)
 	}
+	mux.HandleFunc("GET /siege-art.js", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
+		io.WriteString(w, siegeart.JS)
+	})
 
 	mux.HandleFunc("GET /api/whoami", s.api(false, s.whoami))
 	mux.HandleFunc("GET /api/status", s.api(false, s.status))
@@ -368,6 +383,9 @@ func (s *Server) putSettings(_ http.ResponseWriter, r *http.Request, role Role) 
 	}
 	if ch.Paused != nil && role != RoleAdmin {
 		return nil, fail(http.StatusForbidden, "only the human admin can toggle pause; the AI may propose it")
+	}
+	if ch.ObserveOnly != nil && role != RoleAdmin {
+		return nil, fail(http.StatusForbidden, "only the human admin can toggle observe_only; the AI may propose it")
 	}
 	return s.apply(ch, role)
 }

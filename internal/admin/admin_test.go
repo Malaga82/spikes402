@@ -863,7 +863,7 @@ func reloadEnv(t *testing.T, e *env) *env {
 	n := &env{ln: lightning.NewFake(), now: e.now, file: e.file}
 	n.mon = NewMonitor(cfg.Admin.VisitorIPs, n.now)
 	n.gate = gate.New(gate.Options{
-		PriceSats: cfg.PriceSats, Protect: cfg.Protect, Prices: cfg.Prices, Paused: cfg.Paused, PoW: cfg.PoW, ChallengeTTL: cfg.ChallengeTTL(),
+		PriceSats: cfg.PriceSats, Protect: cfg.Protect, Prices: cfg.Prices, Paused: cfg.Paused, PoW: cfg.PoW, ChallengeTTL: cfg.ChallengeTTL(), PassTTL: cfg.PassTTL(),
 		SecretKey: []byte(strings.Repeat("s", 32)), Lightning: n.ln, Next: http.NotFoundHandler(),
 		ChallengesPerMinute: cfg.ChallengesPerMinute, MaxInvoicesPerMinute: 1000, MaxPendingInvoices: 1000,
 		Observer: n.mon.Observe,

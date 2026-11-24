@@ -35,6 +35,7 @@ type overrideFile struct {
 	ChallengesPerMinute int                    `json:"challenges_per_minute"`
 	BotPolicies         map[string]gate.Policy `json:"bot_policies"`
 	Paused              bool                   `json:"paused"`
+	ObserveOnly         bool                   `json:"observe_only,omitempty"`
 }
 
 func (o overrideFile) changes() Changes {
@@ -46,6 +47,7 @@ func (o overrideFile) changes() Changes {
 	}
 	sps, cpm := o.PowSecondsPerSat, o.ChallengesPerMinute
 	paused := o.Paused
+	obs := o.ObserveOnly
 	price := o.PriceSats
 	return Changes{
 		PriceSats:           &price,
@@ -55,6 +57,7 @@ func (o overrideFile) changes() Changes {
 		ChallengesPerMinute: &cpm,
 		BotPolicies:         &policies,
 		Paused:              &paused,
+		ObserveOnly:         &obs,
 	}
 }
 
@@ -71,6 +74,7 @@ func snapshot(c *Config) overrideFile {
 		ChallengesPerMinute: c.ChallengesPerMinute,
 		BotPolicies:         policies,
 		Paused:              c.Paused,
+		ObserveOnly:         c.ObserveOnly,
 	}
 }
 

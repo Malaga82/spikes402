@@ -4,13 +4,14 @@
 "use strict";
 
 const $ = (id) => document.getElementById(id);
-const state = { key: sessionStorage.getItem("spikes402-key") || "", seq: 0, first: true, recent: [], sprites: [], timers: [] };
+const state = { key: sessionStorage.getItem("spikes402-key") || "", seq: 0, first: true, recent: [], timers: [] };
 
-// One colour per outcome group: the same four as the numbers on top.
-const GROUP = { paid: "paid", "pow-solved": "pow", free: "pow", challenged: "held",
-  rejected: "repelled", "rate-limited": "repelled", busy: "repelled", blocked: "repelled" };
-const COLOR = { paid: "#ffc83d", pow: "#00e5ff", held: "#9aa3c7", repelled: "#ff4d6d" };
-const OUTCOME = { paid: "paid ⚡", "pow-solved": "did the work", free: "let in (policy)", challenged: "stopped (402)",
+// The wall drawing and the outcome colours are shared with the public
+// siege page (siege-art.js). GROUP maps an outcome to one of the four
+// colours of the numbers on top.
+const { GROUP } = SiegeArt;
+const art = SiegeArt.create($("sprites"));
+const OUTCOME = { paid: "paid ⚡", "pow-solved": "did the work", free: "let in (policy)", observed: "would 402", challenged: "stopped (402)",
   rejected: "fake proof", "rate-limited": "too fast (429)", busy: "busy (503)", blocked: "blocked (403)" };
 
 async function api(method, path, body) {
@@ -58,8 +59,8 @@ function logout(text) {
   sessionStorage.removeItem("spikes402-key"); state.key = "";
   state.timers.forEach(clearInterval); state.timers = [];
   document.querySelectorAll(".page").forEach((s) => (s.hidden = true));
-  $("nav").hidden = true; $("node").hidden = true; $("login").hidden = false;
-  $("pause-banner").hidden = true; document.body.classList.remove("paused");
+  $("nav").hidden = true; $("node").hidden = true; $("lot-pill").hidden = true; $("login").hidden = false;
+  $("pause-banner").hidden = true; $("observe-banner").hidden = true; document.body.classList.remove("paused");
   $("login-error").textContent = text || "";
 }
 function route() {
@@ -101,50 +102,22 @@ function renderFeed(visits) {
   const feed = $("feed");
   for (const v of visits) {
     const tr = el("tr");
-    tr.append(el("td", time(v.time)), el("td", who(v)), el("td", v.path), el("td", OUTCOME[v.outcome] || v.outcome, GROUP[v.outcome]));
+    const outText = v.outcome === "observed" && v.price ? `would 402 (${v.price} ${v.price === 1 ? "sat" : "sats"})` : (OUTCOME[v.outcome] || v.outcome);
+    tr.append(el("td", time(v.time)), el("td", who(v)), el("td", v.path), el("td", outText, GROUP[v.outcome]));
     feed.prepend(tr);
   }
   while (feed.rows.length > 10) feed.deleteRow(feed.rows.length - 1);
 }
 
-// A visitor walks from the left to the wall, then passes the gate into the
-// site or fades at the wall (repelled ones drift back). Names show on hover,
-// or next to the dot when only a few are on screen.
-const SVGNS = "http://www.w3.org/2000/svg";
-const WALL_X = 610, GATE_Y = 205, MAX_SPRITES = 60, LABEL_BELOW = 6;
-
 function spawn(v) {
-  if (state.sprites.length >= MAX_SPRITES) state.sprites.shift().g.remove();
-  const group = GROUP[v.outcome] || "held";
-  const g = document.createElementNS(SVGNS, "g"); g.setAttribute("class", "sprite");
-  const c = document.createElementNS(SVGNS, "circle"); c.setAttribute("r", 6); c.setAttribute("fill", COLOR[group]);
-  const title = document.createElementNS(SVGNS, "title"); title.textContent = who(v) + " · " + (OUTCOME[v.outcome] || v.outcome);
-  const label = document.createElementNS(SVGNS, "text"); label.setAttribute("x", 10); label.setAttribute("y", 4);
-  label.textContent = v.bot ? who(v) : "";
-  g.append(c, title, label);
-  $("sprites").append(g);
-  const y0 = 40 + Math.random() * 320;
-  state.sprites.push({ g, label, group, t0: performance.now(), x0: 20 + Math.random() * 60, y0, ty: group === "paid" || group === "pow" ? GATE_Y + (Math.random() * 30 - 15) : y0 });
+  art.spawn(GROUP[v.outcome] || "held", {
+    title: who(v) + " · " + (OUTCOME[v.outcome] || v.outcome),
+    label: v.bot ? who(v) : "",
+  });
 }
 
-const ease = (t) => (t < 0 ? 0 : t > 1 ? 1 : 1 - Math.pow(1 - t, 2));
 function frame(now) {
-  const few = state.sprites.length <= LABEL_BELOW;
-  state.sprites = state.sprites.filter((s) => {
-    const t = now - s.t0, walk = 2600, after = t - walk;
-    let x, y = s.ty, op = 1;
-    if (after < 0) { const k = ease(t / walk); x = s.x0 + (WALL_X - s.x0) * k; y = s.y0 + (s.ty - s.y0) * k; }
-    else if (s.group === "paid" || s.group === "pow") {
-      const k = ease(after / 1800); x = WALL_X + (860 - WALL_X) * k; y = s.ty + (240 - s.ty) * k; op = 1 - Math.max(0, (after - 1000) / 800);
-    } else {
-      const k = ease(after / 1500); x = WALL_X - (s.group === "repelled" ? 80 * k : 0); op = 1 - k;
-    }
-    s.label.style.display = few ? "" : "none";
-    s.g.setAttribute("transform", `translate(${x.toFixed(1)},${y.toFixed(1)})`);
-    s.g.setAttribute("opacity", Math.max(0, op).toFixed(2));
-    if (op <= 0) { s.g.remove(); return false; }
-    return true;
-  });
+  art.step(now);
   if (state.key) requestAnimationFrame(frame);
 }
 
@@ -158,12 +131,24 @@ async function refresh() {
   $("node-text").textContent = bad ? "Lightning: problem" : "Lightning OK";
   $("node").title = n.breaker_open ? "Paused after failures until " + time(n.breaker_open_until)
     : st.node_error || n.last_error || (st.node ? fmt(st.node.balance_sat) + " sats, " + st.node.channels + " channels" : s.lightning_backend);
+  const lot = st.gate.lottery;
+  $("lot-pill").hidden = !lot;
+  if (lot) {
+    $("lot-pill").className = "node " + (lot.connected ? "ok" : "bad");
+    $("lot-text").textContent = lot.connected ? "Lottery OK" : "Lottery: offline";
+    $("lot-pill").title = (lot.connected ? "Connected to " : "Offline: ") + lot.pool +
+      (lot.pool_difficulty ? " · diff " + big(lot.pool_difficulty) : "") +
+      (lot.best_difficulty ? " · best " + big(lot.best_difficulty) : "") +
+      " · shares " + fmt(lot.shares_accepted) + "/" + fmt(lot.shares_submitted) +
+      (lot.last_error ? " · " + lot.last_error : "");
+  }
   state.status = st;
   if (!$("settings").hidden) renderCurrent(st);
   if (st.node) $("wd-balance").textContent = fmt(st.node.balance_sat);
   $("wd-dest").textContent = s.withdraw_destination || "";
   $("pause-banner").hidden = !s.paused;
-  document.body.classList.toggle("paused", !!s.paused);
+  $("observe-banner").hidden = !s.observe_only || !!s.paused;
+  document.body.classList.toggle("paused", !!s.paused || !!s.observe_only);
 }
 
 function formatSurge(live, cfg) {
@@ -181,6 +166,7 @@ function formatSurge(live, cfg) {
 function renderCurrent(st) {
   const s = st.settings, n = st.gate.node, p = s.current_pow;
   const list = [["Origin", s.origin], ["Paused", s.paused ? "yes (protected paths are free)" : "no"],
+    ["Observe only", s.observe_only ? "yes (dry-run, no 402s)" : "no"],
     ["Protected", s.protect.join(" ")], ["Price", s.price_sats + " sats"],
     ["Path prices", (s.prices || []).map((r) => r.pattern + " = " + r.price_sats + " sats").join(", ") || "none (default only)"],
     ["Surge", formatSurge(st.gate.surge, s.surge)],
@@ -190,6 +176,11 @@ function renderCurrent(st) {
     ["Lightning backend", s.lightning_backend], ["Invoices created / failed", fmt(n.invoices_created) + " / " + fmt(n.invoice_failures)],
     ["Open invoices", fmt(st.gate.open_invoices)]];
   if (n.last_error) list.push(["Last Lightning error", n.last_error + " (" + time(n.last_error_at) + ")"]);
+  if (st.gate.lottery) {
+    const l = st.gate.lottery;
+    list.push(["Lottery", (l.connected ? "connected" : "offline") + " (" + l.pool + "), pool diff " + big(l.pool_difficulty) +
+      ", best " + (l.best_difficulty ? big(l.best_difficulty) : "–") + ", shares " + fmt(l.shares_accepted) + "/" + fmt(l.shares_submitted)]);
+  }
   rows($("set-current"), list);
 }
 
@@ -206,6 +197,8 @@ function fillSettings(s) {
   $("f-price").value = s.price_sats; $("f-sps").value = s.pow_seconds_per_sat; $("f-cpm").value = s.challenges_per_minute;
   $("f-pause").checked = !!s.paused;
   $("f-pause").disabled = state.role !== "admin";
+  $("f-observe").checked = !!s.observe_only;
+  $("f-observe").disabled = state.role !== "admin";
   fillProtect(s.protect);
   fillPrices(s.prices);
   fillPolicies(s.bot_policies);
@@ -313,6 +306,8 @@ function weakenReasons(cur, ch) {
   const why = [];
   if (ch.paused === true && !cur.paused) why.push("protected paths would be served free (pause)");
   if (ch.paused === false && cur.paused) why.push("protection would start charging again (unpause)");
+  if (ch.observe_only === true && !cur.observe_only) why.push("protected paths would be served free (observe_only)");
+  if (ch.observe_only === false && cur.observe_only) why.push("protection would leave observation mode and start charging");
   if (ch.price_sats != null && ch.price_sats < cur.price_sats) why.push("the default price would fall");
   if (ch.pow_seconds_per_sat != null && ch.pow_seconds_per_sat < cur.pow_seconds_per_sat) why.push("proof-of-work would get easier");
   if (ch.challenges_per_minute != null && ch.challenges_per_minute > cur.challenges_per_minute) why.push("the per-client rate limit would be raised");
@@ -340,6 +335,7 @@ $("set-form").addEventListener("submit", async (e) => {
   const cur = state.current, ch = {};
   try {
     if ($("f-pause").checked !== !!cur.paused) ch.paused = $("f-pause").checked;
+    if ($("f-observe").checked !== !!cur.observe_only) ch.observe_only = $("f-observe").checked;
     if (+$("f-price").value !== cur.price_sats) ch.price_sats = +$("f-price").value;
     const protect = readProtect();
     if (JSON.stringify(protect) !== JSON.stringify(cur.protect || [])) ch.protect = protect;

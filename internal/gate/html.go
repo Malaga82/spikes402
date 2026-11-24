@@ -107,7 +107,7 @@ var page = template.Must(template.New("402").Parse(`<!doctype html>
 <p><small>Bots and scripts can also solve a proof-of-work puzzle instead of paying
 (difficulty {{.PoW.Difficulty}}, about {{.PoW.ExpectedSeconds}} seconds on one CPU core). Details are in the <code>WWW-Authenticate</code> headers of this response.
 This offer expires at {{.ExpiresAt.Format "15:04 MST"}}.</small></p>
-<p><small>Protected by <a href="https://github.com/Choffolo/spikes402">Spikes402</a>.</small></p>
+<p><small>Protected by <a href="https://github.com/Choffolo/spikes402">Spikes402</a>.{{with .Siege}} <a href="{{.}}">See the siege in real time</a>{{end}}</small></p>
 {{.Script}}
 </body>
 </html>
@@ -196,6 +196,24 @@ func (g *Gate) serveReserved(w http.ResponseWriter, r *http.Request) {
 		serveWorker(w, r)
 	case ClaimPath:
 		g.serveClaim(w, r)
+	case StatsPath:
+		if g.opt.PublicStats != nil {
+			g.opt.PublicStats.ServeHTTP(w, r)
+			return
+		}
+		http.NotFound(w, r)
+	case SiegePagePath:
+		if g.opt.PublicSiege != nil {
+			g.opt.PublicSiege.servePage(w, r)
+			return
+		}
+		http.NotFound(w, r)
+	case SiegeJSONPath:
+		if g.opt.PublicSiege != nil {
+			g.opt.PublicSiege.serveJSON(w, r)
+			return
+		}
+		http.NotFound(w, r)
 	default:
 		http.NotFound(w, r)
 	}
@@ -281,7 +299,7 @@ func invoiceQR(invoice string) template.URL {
 	return template.URL("data:image/png;base64," + base64.StdEncoding.EncodeToString(png))
 }
 
-func writeHTML(w io.Writer, b challengeBody, qr template.URL, mode string) {
+func writeHTML(w io.Writer, b challengeBody, qr template.URL, mode, siege string) {
 	data := struct {
 		challengeBody
 		QR        template.URL
@@ -290,6 +308,7 @@ func writeHTML(w io.Writer, b challengeBody, qr template.URL, mode string) {
 		Logo      template.HTML
 		Favicon   template.URL
 		SatUnit   string
+		Siege     string
 		Solve     bool   // the browser can solve this puzzle (browser_pow on, not Argon2id)
 		Auto      bool   // the puzzle starts at once (browser_pow "auto")
 		Mode      string // browser_pow: "button" or "auto"
@@ -297,7 +316,7 @@ func writeHTML(w io.Writer, b challengeBody, qr template.URL, mode string) {
 		Tiles     template.HTML
 		WorkerSrc string
 		Claim     string
-	}{challengeBody: b, QR: qr, LD: ldJSON(b.Preview), Logo: logoHome, Favicon: logoFavicon, SatUnit: satUnit(b.PriceSats), WorkerSrc: workerSrc, Claim: ClaimPath, Tiles: pwTiles}
+	}{challengeBody: b, QR: qr, LD: ldJSON(b.Preview), Logo: logoHome, Favicon: logoFavicon, SatUnit: satUnit(b.PriceSats), Siege: siege, WorkerSrc: workerSrc, Claim: ClaimPath, Tiles: pwTiles}
 	var scripts string
 	if mode == "" {
 		mode = BrowserPoWButton

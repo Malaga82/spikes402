@@ -45,8 +45,8 @@ label { display:block; color:var(--dim); }
 @media (max-width: 640px) { .stats { grid-template-columns:repeat(2, 1fr); } }
 @media (prefers-reduced-motion: reduce) { .wall { animation:none; } }
 
-#pause-banner { margin:0; padding:.6rem 1rem; background:#5a3a00; color:#ffd27a; text-align:center; font-weight:600; }
-#pause-banner[hidden] { display:none; }
+#pause-banner, #observe-banner { margin:0; padding:.6rem 1rem; background:#5a3a00; color:#ffd27a; text-align:center; font-weight:600; }
+#pause-banner[hidden], #observe-banner[hidden] { display:none; }
 label.pause { display:flex; align-items:center; gap:.5rem; font-weight:600; }
 label.pause input { width:auto; }
 table.rules { margin:.2rem 0 .4rem; }

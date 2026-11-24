@@ -5,13 +5,16 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Spikes402</title>
 <link rel="stylesheet" href="style.css">
+<script src="siege-art.js" defer></script>
 <script src="app.js" defer></script>
 </head>
 <body>
 <p id="pause-banner" hidden>Protection is paused: protected paths are served free and no invoices are created.</p>
+<p id="observe-banner" hidden>Observation mode: protected paths are served free; visits that would get 402 are recorded with their price.</p>
 <header>
   <h1>⚡ Spikes402</h1>
   <span id="node" class="node" hidden><i></i><span id="node-text">Lightning</span></span>
+  <span id="lot-pill" class="node" hidden><i></i><span id="lot-text">Lottery</span></span>
   <nav id="nav" hidden><a href="#" data-page="siege">Monitor</a><a href="#stats" data-page="stats">Stats</a><a href="#settings" data-page="settings">Settings</a></nav>
 </header>
 
@@ -131,6 +134,7 @@
     <p class="note">Changes apply immediately and are saved next to the config file (config.json itself is never rewritten). Secrets, the Lightning node, withdrawals, ports, proxies, node invoice limits and surge pricing stay in the config file on purpose. Current surge multipliers, when enabled, are in the status above.</p>
     <form id="set-form">
       <label class="pause"><input id="f-pause" type="checkbox"> Pause protection (serve protected paths free, create no invoices)</label>
+      <label class="pause"><input id="f-observe" type="checkbox"> Observation mode (dry-run: serve free, record URLs and prices that would get 402)</label>
       <label>Price (sats) <input id="f-price" type="number" min="1" max="1000000"></label>
       <p class="note">Protected paths: same matching as the config file. At least one pattern is required.</p>
       <table id="protect-rules" class="rules">

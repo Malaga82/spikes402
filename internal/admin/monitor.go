@@ -39,6 +39,7 @@ type Visit struct {
 	Bot     string    `json:"bot,omitempty"`
 	Path    string    `json:"path"` // without query string
 	Outcome string    `json:"outcome"`
+	Price   int64     `json:"price,omitempty"`
 }
 
 // Counts are totals since start.
@@ -91,6 +92,7 @@ func (m *Monitor) Observe(e gate.Event) {
 		Bot:     botName(e.Class),
 		Path:    cleanPath(e.Resource),
 		Outcome: string(e.Outcome),
+		Price:   e.Price,
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()

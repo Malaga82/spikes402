@@ -18,6 +18,9 @@ func WeakensProtection(cur, next *Config) []string {
 	if next.Paused && !cur.Paused {
 		why = append(why, "pause would serve protected paths free")
 	}
+	if next.ObserveOnly && !cur.ObserveOnly {
+		why = append(why, "observe_only would serve protected paths free")
+	}
 	if next.PriceSats < cur.PriceSats {
 		why = append(why, fmt.Sprintf("price_sats would fall from %d to %d", cur.PriceSats, next.PriceSats))
 	}

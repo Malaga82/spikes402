@@ -32,6 +32,7 @@ type Options struct {
 	Protect      []string                         // path patterns that require payment
 	Prices       []PriceRule                      // optional per-path prices; first match wins
 	Paused       bool                             // serve protected paths free; create no invoices
+	ObserveOnly  bool                             // dry-run: serve free, record URLs & prices that would get 402
 	PoW          func(priceSats int64) pow.Params // the puzzle for a price
 	ChallengeTTL time.Duration                    // how long a 402 challenge stays valid
 	PassTTL      time.Duration                    // how long a post-unlock pass lasts; 0 means no pass; cap MaxPassTTL
@@ -59,6 +60,15 @@ type Options struct {
 	// Observer, if set, is told about every request to a protected path.
 	// It is called synchronously and must be fast.
 	Observer func(Event)
+
+	// PublicStats, if set, records aggregate counters and serves
+	// GET /.spikes402/stats. It is independent of the admin dashboard.
+	PublicStats *PublicStats
+
+	// PublicSiege, if set, records a delayed, anonymised per-second view
+	// of the siege and serves GET /.spikes402/siege (page) and
+	// /.spikes402/siege.json. The 402 page then links to it.
+	PublicSiege *PublicSiege
 
 	// Argon2MaxMemoryMiB is the most memory concurrent Argon2id checks may
 	// use together. 0 means DefaultArgonMaxMemoryMiB (256). A single check
@@ -148,7 +158,7 @@ func New(opt Options) *Gate {
 	g.invoices.now = func() time.Time { return g.now() }
 	g.live.Store(&Settings{
 		PriceSats: opt.PriceSats, Prices: append([]PriceRule(nil), opt.Prices...),
-		Protect: append([]string(nil), opt.Protect...), Paused: opt.Paused,
+		Protect: append([]string(nil), opt.Protect...), Paused: opt.Paused, ObserveOnly: opt.ObserveOnly,
 		PoW: opt.PoW, Policies: opt.Policies, ChallengesPerMinute: opt.ChallengesPerMinute,
 		Surge: cloneSurge(opt.Surge),
 	})
@@ -174,7 +184,7 @@ func (g *Gate) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad path: "+why, http.StatusBadRequest)
 		return
 	}
-	if g.opt.Observer != nil { // details for the statistics, filled in as the request goes
+	if g.opt.Observer != nil || g.opt.PublicStats != nil { // details for the statistics, filled in as the request goes
 		r = r.WithContext(context.WithValue(r.Context(), infoKey{}, &reqInfo{session: session}))
 	}
 	if !g.protected(r.URL.Path, set) {
@@ -199,6 +209,20 @@ func (g *Gate) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	pol := g.policyFor(set, class)
+	if set.ObserveOnly {
+		r.Header.Del("Authorization")
+		if pol.Action == ActionFree {
+			g.forward(w, r)
+			g.observe(r, class, OutcomeFree)
+			return
+		}
+		if ri := info(r); ri != nil {
+			ri.price = pol.price(g.offerPrice(r.URL.Path, set))
+		}
+		g.forward(w, r)
+		g.observe(r, class, OutcomeObserved)
+		return
+	}
 	switch pol.Action {
 	case ActionBlock:
 		g.observe(r, class, OutcomeBlocked)
@@ -736,7 +760,11 @@ func (g *Gate) writeChallenge(w http.ResponseWriter, r *http.Request, o offer, p
 		h.Set("Content-Type", "text/html; charset=utf-8")
 		h.Set("Content-Security-Policy", pageCSP)
 		w.WriteHeader(http.StatusPaymentRequired)
-		writeHTML(w, body, template.URL(o.qr), g.opt.BrowserPoW)
+		var siege string
+		if g.opt.PublicSiege != nil {
+			siege = SiegePagePath
+		}
+		writeHTML(w, body, template.URL(o.qr), g.opt.BrowserPoW, siege)
 		return
 	}
 	h.Set("Content-Type", "application/json")

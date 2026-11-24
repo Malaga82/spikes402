@@ -245,7 +245,7 @@ func (g *Gate) serveClaim(w http.ResponseWriter, r *http.Request) {
 			g.writeClaim(w, r, http.StatusConflict, claimBody{Status: "spent"})
 			return
 		}
-		if g.opt.Observer != nil { // the statistics count the paid price, on the paid page
+		if g.opt.Observer != nil || g.opt.PublicStats != nil || g.opt.PublicSiege != nil { // the statistics count the paid price, on the paid page
 			obs := r.WithContext(context.WithValue(r.Context(), infoKey{}, &reqInfo{token: c.ID, price: c.PriceSats}))
 			// The token only has the page's hash; the 402 page's fetch names the
 			// page in its Referer. Believed only when it hashes to the token's page.

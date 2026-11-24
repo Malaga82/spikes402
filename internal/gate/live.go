@@ -18,6 +18,7 @@ type Settings struct {
 	Prices              []PriceRule // first match wins; empty means use PriceSats only
 	Protect             []string    // path patterns that require payment
 	Paused              bool        // protected paths are free; no invoices
+	ObserveOnly         bool        // dry-run: serve free, record URLs & prices that would get 402
 	PoW                 func(priceSats int64) pow.Params
 	Policies            map[string]Policy
 	ChallengesPerMinute int
@@ -63,6 +64,7 @@ const (
 	OutcomeBusy        Outcome = "busy"         // 503, proof-of-work checks full
 	OutcomeBlocked     Outcome = "blocked"      // 403 by a bot policy
 	OutcomeFree        Outcome = "free"         // let through by a bot policy (or while paused)
+	OutcomeObserved    Outcome = "observed"     // observe_only dry-run: would have been challenged/blocked, served free
 	OutcomePass        Outcome = "pass"         // let through with a pass cookie (a payment made a moment ago)
 	OutcomeOpen        Outcome = "open"         // an unprotected path, forwarded as is (statistics only)
 )
@@ -77,6 +79,7 @@ type Event struct {
 	Class    botid.Class
 	Resource string
 	Outcome  Outcome
+	Sats     int64 // token price; counted as received only for OutcomePaid
 
 	// Details for statistics; zero when not known. Like IP, they come from
 	// the visitor: observers must not trust or show them unescaped.
@@ -110,7 +113,7 @@ func info(r *http.Request) *reqInfo {
 }
 
 func (g *Gate) observe(r *http.Request, class botid.Class, o Outcome) {
-	if g.opt.Observer == nil {
+	if g.opt.Observer == nil && g.opt.PublicStats == nil && g.opt.PublicSiege == nil {
 		return
 	}
 	e := Event{Time: g.now(), Client: g.client(r), IP: g.clientIP(r), Class: class, Resource: resource(r), Outcome: o,
@@ -118,9 +121,22 @@ func (g *Gate) observe(r *http.Request, class botid.Class, o Outcome) {
 		HTML: strings.Contains(r.Header.Get("Accept"), "text/html")}
 	if ri := info(r); ri != nil {
 		e.Session, e.Token, e.Price, e.Algorithm, e.Status, e.Latency = ri.session, ri.token, ri.price, ri.alg, ri.status, ri.latency
+		if o == OutcomePaid {
+			e.Sats = ri.price
+		}
 		e.Page = ri.status >= 200 && ri.status < 300 && strings.Contains(ri.ctype, "text/html")
 	}
-	g.opt.Observer(e)
+	if o != OutcomeOpen {
+		if g.opt.PublicStats != nil {
+			g.opt.PublicStats.Observe(e)
+		}
+		if g.opt.PublicSiege != nil {
+			g.opt.PublicSiege.Observe(e)
+		}
+	}
+	if g.opt.Observer != nil {
+		g.opt.Observer(e)
+	}
 }
 
 // Status is a snapshot of the gate's internal state for the dashboard.
